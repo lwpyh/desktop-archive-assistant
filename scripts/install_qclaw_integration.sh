@@ -196,21 +196,21 @@ else
         echo "  ✅ mmproj 已存在: $MMPROJ_FILE"
       fi
 
-      # 检查 ornith-vision:latest 是否存在且带 vision 能力
+      # 检查 ornith-vision 是否存在且带 vision 能力
       NEED_VISION_RECREATE=0
-      if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision:latest"; then
-        if ollama show ornith-vision:latest 2>/dev/null | grep -qi "vision"; then
-          echo "  ✅ ornith-vision:latest 已存在（带 vision 能力），跳过"
+      if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision"; then
+        if ollama show ornith-vision 2>/dev/null | grep -qi "vision"; then
+          echo "  ✅ ornith-vision 已存在（带 vision 能力），跳过"
         else
-          echo "  ⚠️  ornith-vision:latest 不带 vision 能力，将覆盖重建"
-          ollama rm ornith-vision:latest 2>/dev/null || true
+          echo "  ⚠️  ornith-vision 不带 vision 能力，将覆盖重建"
+          ollama rm ornith-vision 2>/dev/null || true
           NEED_VISION_RECREATE=1
         fi
       else
         NEED_VISION_RECREATE=1
       fi
 
-      # 创建/重建 ornith-vision:latest（Q8_0 + mmproj）
+      # 创建/重建 ornith-vision（Q8_0 + mmproj）
       if [ "$NEED_VISION_RECREATE" -eq 1 ] && [ -f "$MMPROJ_FILE" ] && ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_Q8"; then
         MODFILE=$(mktemp /tmp/ornith_vision_modelfile.XXXXXX)
         echo "FROM $ORNITH_Q8" > "$MODFILE"
@@ -218,14 +218,14 @@ else
         echo 'PARAMETER temperature 0.6' >> "$MODFILE"
         echo 'PARAMETER top_p 0.95' >> "$MODFILE"
         echo 'PARAMETER top_k 20' >> "$MODFILE"
-        if ollama create ornith-vision:latest -f "$MODFILE"; then
-          echo "  ✅ ornith-vision:latest 已创建（Q8_0 + mmproj，~10.4GB）"
+        if ollama create ornith-vision -f "$MODFILE"; then
+          echo "  ✅ ornith-vision 已创建（Q8_0 + mmproj，~10.4GB）"
         else
-          echo "  ❌ ornith-vision:latest 创建失败"
+          echo "  ❌ ornith-vision 创建失败"
           echo "     手动创建:"
           echo "     echo 'FROM $ORNITH_Q8' > /tmp/Modelfile.vision"
           echo "     echo 'ADAPTER $MMPROJ_FILE' >> /tmp/Modelfile.vision"
-          echo "     ollama create ornith-vision:latest -f /tmp/Modelfile.vision"
+          echo "     ollama create ornith-vision -f /tmp/Modelfile.vision"
         fi
         rm -f "$MODFILE"
       elif [ "$NEED_VISION_RECREATE" -eq 1 ] && [ ! -f "$MMPROJ_FILE" ]; then
