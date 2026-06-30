@@ -21,7 +21,7 @@
 #    再跑此脚本。否则 qclaw 启动时会覆盖 openclaw.json，导致 desktop-archiver agent 消失。
 #
 # 幂等：可重复跑，不会破坏已有配置。
-set -euo pipefail
+set -eo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATES="$SKILL_DIR/scripts/qclaw_templates"
@@ -44,6 +44,10 @@ for arg in "$@"; do
     *) echo "unknown arg: $arg"; exit 1 ;;
   esac
 done
+
+# 模型名称常量（提前定义，避免 set -u 问题）
+ORNITH_Q8="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"
+ORNITH_VISION_Q5="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"
 
 echo "=========================================="
 echo "  desktop-archive-assistant 一键安装"
@@ -104,7 +108,6 @@ else
       # ornith-9b: 9B 文本模型（Q8_0 量化，9.5GB，qclaw 交互用）
       # 从 HuggingFace 仓库拉取 Q8_0 版本，再创建别名 ornith-9b:latest
       # 如果已有 ornith-9b:latest 但不是 Q8_0 量化，覆盖重建
-      ORNITH_Q8="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"
 
       # 先确保 Q8_0 基础权重存在
       if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_Q8"; then
@@ -144,7 +147,6 @@ else
 
       # ornith-vision: 9B + mmproj 视觉投影器（Q5_K_M，7.4GB，VLM 视觉用）
       # 注意：ornith-vision 用 Q5_K_M 量化 + 456M mmproj，是视觉版
-      ORNITH_VISION_Q5="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"
 
       # 先确保 Q5_K_M 基础权重存在
       if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_VISION_Q5"; then
