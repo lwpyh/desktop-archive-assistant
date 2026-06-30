@@ -154,44 +154,64 @@ else
       fi
 
       # ornith-vision: 9B + mmproj 视觉投影器（Q5_K_M，7.4GB，VLM 视觉用）
-      # 注意：ornith-vision 用 Q5_K_M 量化 + 456M mmproj，是视觉版
+      # 注意：ornith-vision 需要手动创建（Q5_K_M 主权重 + mmproj 视觉投影器）
+      #       mmproj 文件无法从公开仓库自动拉取，需要从已有机器拷贝
+      #       如果没有 mmproj 文件，建议直接用 qwen3.5:4b（原生支持 vision）
+      #
+      # 如果本机有 ~/ornith-vision-build/mmproj-f16.gguf，自动创建 ornith-vision
+      # 否则跳过，提示用户手动创建或用 qwen3.5:4b 替代
 
-      # 先确保 Q5_K_M 基础权重存在
-      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_VISION_Q5"; then
-        echo "  ⏳ 拉取 $ORNITH_VISION_Q5（6.5GB，Q5_K_M 量化，视觉版基础）..."
-        if ollama pull "$ORNITH_VISION_Q5"; then
-          echo "  ✅ Ornith Q5_K_M 拉取完成"
+      MMPROJ_FILE="${HOME}/ornith-vision-build/mmproj-f16.gguf"
+
+      if [ -f "$MMPROJ_FILE" ]; then
+        echo "  ✅ 发现 mmproj 文件: $MMPROJ_FILE"
+
+        # 先确保 Q5_K_M 基础权重存在
+        if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_VISION_Q5"; then
+          echo "  ⏳ 拉取 $ORNITH_VISION_Q5（6.5GB，Q5_K_M 量化，视觉版基础）..."
+          if ollama pull "$ORNITH_VISION_Q5"; then
+            echo "  ✅ Ornith Q5_K_M 拉取完成"
+          else
+            echo "  ❌ Ornith Q5_K_M 拉取失败，请手动运行: ollama pull $ORNITH_VISION_Q5"
+          fi
         else
-          echo "  ❌ Ornith Q5_K_M 拉取失败，请手动运行: ollama pull $ORNITH_VISION_Q5"
+          echo "  ✅ $ORNITH_VISION_Q5 已存在"
         fi
-      else
-        echo "  ✅ $ORNITH_VISION_Q5 已存在"
-      fi
 
-      # 检查 ornith-vision:latest 是否存在且带 vision 能力
-      NEED_VISION_RECREATE=0
-      if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision:latest"; then
-        # 检查现有 ornith-vision 是否有 vision 能力
-        if ollama show ornith-vision:latest 2>/dev/null | grep -qi "vision"; then
-          echo "  ✅ ornith-vision:latest 已存在（带 vision 能力），跳过"
+        # 检查 ornith-vision:latest 是否存在且带 vision 能力
+        NEED_VISION_RECREATE=0
+        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision:latest"; then
+          if ollama show ornith-vision:latest 2>/dev/null | grep -qi "vision"; then
+            echo "  ✅ ornith-vision:latest 已存在（带 vision 能力），跳过"
+          else
+            echo "  ⚠️  ornith-vision:latest 不带 vision 能力，将覆盖重建"
+            ollama rm ornith-vision:latest 2>/dev/null || true
+            NEED_VISION_RECREATE=1
+          fi
         else
-          echo "  ⚠️  ornith-vision:latest 不带 vision 能力，将覆盖重建"
-          ollama rm ornith-vision:latest 2>/dev/null || true
           NEED_VISION_RECREATE=1
         fi
-      else
-        NEED_VISION_RECREATE=1
-      fi
 
-      # 拉取或重建 ornith-vision
-      if [ "$NEED_VISION_RECREATE" -eq 1 ]; then
-        echo "  ⏳ 尝试拉取现成 ornith-vision..."
-        if ollama pull ornith-vision 2>/dev/null; then
-          echo "  ✅ ornith-vision:latest 拉取完成"
-        else
-          echo "  ℹ️  ornith-vision 无现成包，需从 Q5_K_M + mmproj 创建（需要 mmproj 文件）"
-          echo "     如需视觉模型，可参考本机配置手动创建，或直接用 qwen3.5:4b（原生支持 vision）"
+        # 创建/重建 ornith-vision:latest（Q5_K_M + mmproj）
+        if [ "$NEED_VISION_RECREATE" -eq 1 ] && ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_VISION_Q5"; then
+          MODFILE=$(mktemp /tmp/ornith_vision_modelfile.XXXXXX)
+          echo "FROM $ORNITH_VISION_Q5" > "$MODFILE"
+          echo "ADAPTER $MMPROJ_FILE" >> "$MODFILE"
+          echo 'PARAMETER temperature 0.6' >> "$MODFILE"
+          echo 'PARAMETER top_p 0.95' >> "$MODFILE"
+          echo 'PARAMETER top_k 20' >> "$MODFILE"
+          if ollama create ornith-vision:latest -f "$MODFILE"; then
+            echo "  ✅ ornith-vision:latest 已创建（Q5_K_M + mmproj，7.4GB）"
+          else
+            echo "  ❌ ornith-vision:latest 创建失败，请检查 mmproj 文件路径"
+          fi
+          rm -f "$MODFILE"
         fi
+      else
+        echo "  ℹ️  未找到 mmproj 文件（$MMPROJ_FILE）"
+        echo "     ornith-vision 需要手动创建（Q5_K_M 主权重 + mmproj 视觉投影器）"
+        echo "     如需视觉模型，建议直接用 qwen3.5:4b（原生支持 vision，无需 mmproj）"
+        echo "     或从已有机器拷贝 mmproj-f16.gguf 到 ~/ornith-vision-build/"
       fi
 
       # qwen3.5:4b: 4B 视觉模型（3.4GB，轻量级 VLM，差机器推荐）
