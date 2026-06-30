@@ -102,54 +102,86 @@ else
       }
 
       # ornith-9b: 9B 文本模型（Q8_0 量化，9.5GB，qclaw 交互用）
-      # 从 HuggingFace 仓库拉取，再创建别名 ornith-9b:latest
-      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-9b:latest"; then
-        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"; then
-          echo "  ✅ hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0 已存在"
+      # 从 HuggingFace 仓库拉取 Q8_0 版本，再创建别名 ornith-9b:latest
+      # 如果已有 ornith-9b:latest 但不是 Q8_0 量化，覆盖重建
+      ORNITH_Q8="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"
+
+      # 先确保 Q8_0 基础权重存在
+      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_Q8"; then
+        echo "  ⏳ 拉取 $ORNITH_Q8（9.5GB，Q8_0 量化）..."
+        if ollama pull "$ORNITH_Q8"; then
+          echo "  ✅ Ornith-1.0-9B Q8_0 拉取完成"
         else
-          echo "  ⏳ 拉取 Ornith-1.0-9B-GGUF:Q8_0（9.5GB，Q8_0 量化）..."
-          if ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0; then
-            echo "  ✅ Ornith-1.0-9B Q8_0 拉取完成"
-          else
-            echo "  ❌ Ornith Q8_0 拉取失败，请手动运行:"
-            echo "     ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"
-          fi
-        fi
-        # 创建别名 ornith-9b:latest
-        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"; then
-          printf 'FROM hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0\n' | ollama create ornith-9b:latest -f - 2>/dev/null && \
-            echo "  ✅ 别名 ornith-9b:latest 已创建" || \
-            echo "  ℹ️  别名创建失败，可手动: printf 'FROM hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0\\n' | ollama create ornith-9b:latest -f -"
+          echo "  ❌ Ornith Q8_0 拉取失败，请手动运行: ollama pull $ORNITH_Q8"
         fi
       else
-        echo "  ✅ ornith-9b:latest 已存在（qclaw 交互模型）"
+        echo "  ✅ $ORNITH_Q8 已存在"
+      fi
+
+      # 检查 ornith-9b:latest 是否存在且是 Q8_0 量化
+      NEED_RECREATE=0
+      if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-9b:latest"; then
+        # 检查现有 ornith-9b:latest 的量化版本
+        EXISTING_QUANT=$(ollama show ornith-9b:latest 2>/dev/null | grep -i "quantization" | awk '{print $2}' || true)
+        if [ "$EXISTING_QUANT" = "Q8_0" ]; then
+          echo "  ✅ ornith-9b:latest 已是 Q8_0 量化（$EXISTING_QUANT），跳过"
+        else
+          echo "  ⚠️  ornith-9b:latest 量化版本为 $EXISTING_QUANT（非 Q8_0），将覆盖重建"
+          # 先删除旧版本
+          ollama rm ornith-9b:latest 2>/dev/null || true
+          NEED_RECREATE=1
+        fi
+      else
+        NEED_RECREATE=1
+      fi
+
+      # 创建/重建 ornith-9b:latest（从 Q8_0 基础权重）
+      if [ "$NEED_RECREATE" -eq 1 ] && ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_Q8"; then
+        printf 'FROM %s\n' "$ORNITH_Q8" | ollama create ornith-9b:latest -f - 2>/dev/null && \
+          echo "  ✅ ornith-9b:latest 已创建（Q8_0，9.5GB）" || \
+          echo "  ❌ ornith-9b:latest 创建失败，请手动: printf 'FROM $ORNITH_Q8\\n' | ollama create ornith-9b:latest -f -"
       fi
 
       # ornith-vision: 9B + mmproj 视觉投影器（Q5_K_M，7.4GB，VLM 视觉用）
       # 注意：ornith-vision 用 Q5_K_M 量化 + 456M mmproj，是视觉版
-      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision:latest"; then
-        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"; then
-          echo "  ✅ hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M 已存在"
+      ORNITH_VISION_Q5="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"
+
+      # 先确保 Q5_K_M 基础权重存在
+      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_VISION_Q5"; then
+        echo "  ⏳ 拉取 $ORNITH_VISION_Q5（6.5GB，Q5_K_M 量化，视觉版基础）..."
+        if ollama pull "$ORNITH_VISION_Q5"; then
+          echo "  ✅ Ornith Q5_K_M 拉取完成"
         else
-          echo "  ⏳ 拉取 Ornith-1.0-9B-GGUF:Q5_K_M（6.5GB，Q5_K_M 量化，视觉版基础）..."
-          if ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M; then
-            echo "  ✅ Ornith Q5_K_M 拉取完成"
-          else
-            echo "  ❌ Ornith Q5_K_M 拉取失败，请手动运行:"
-            echo "     ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"
-          fi
+          echo "  ❌ Ornith Q5_K_M 拉取失败，请手动运行: ollama pull $ORNITH_VISION_Q5"
         fi
-        # ornith-vision 需要额外创建（加 mmproj 视觉投影器）
-        # 如果 HuggingFace 上有现成的 vision 版本，直接拉；否则需要从 Q5_K_M + mmproj 创建
+      else
+        echo "  ✅ $ORNITH_VISION_Q5 已存在"
+      fi
+
+      # 检查 ornith-vision:latest 是否存在且带 vision 能力
+      NEED_VISION_RECREATE=0
+      if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision:latest"; then
+        # 检查现有 ornith-vision 是否有 vision 能力
+        if ollama show ornith-vision:latest 2>/dev/null | grep -qi "vision"; then
+          echo "  ✅ ornith-vision:latest 已存在（带 vision 能力），跳过"
+        else
+          echo "  ⚠️  ornith-vision:latest 不带 vision 能力，将覆盖重建"
+          ollama rm ornith-vision:latest 2>/dev/null || true
+          NEED_VISION_RECREATE=1
+        fi
+      else
+        NEED_VISION_RECREATE=1
+      fi
+
+      # 拉取或重建 ornith-vision
+      if [ "$NEED_VISION_RECREATE" -eq 1 ]; then
         echo "  ⏳ 尝试拉取现成 ornith-vision..."
         if ollama pull ornith-vision 2>/dev/null; then
           echo "  ✅ ornith-vision:latest 拉取完成"
         else
-          echo "  ℹ️  ornith-vision 无现成包，需从 Q5_K_M 创建（需要 mmproj 文件）"
+          echo "  ℹ️  ornith-vision 无现成包，需从 Q5_K_M + mmproj 创建（需要 mmproj 文件）"
           echo "     如需视觉模型，可参考本机配置手动创建，或直接用 qwen3.5:4b（原生支持 vision）"
         fi
-      else
-        echo "  ✅ ornith-vision:latest 已存在（VLM 视觉模型）"
       fi
 
       # qwen3.5:4b: 4B 视觉模型（3.4GB，轻量级 VLM，差机器推荐）
