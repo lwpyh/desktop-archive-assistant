@@ -47,7 +47,6 @@ done
 
 # 模型名称常量（提前定义，避免 set -u 问题）
 ORNITH_Q8="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"
-ORNITH_VISION_Q5="hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"
 
 echo "=========================================="
 echo "  desktop-archive-assistant 一键安装"
@@ -153,24 +152,25 @@ else
         rm -f "$MODFILE"
       fi
 
-      # ornith-vision: 9B + mmproj 视觉投影器（Q5_K_M，7.4GB，VLM 视觉用）
-      # 创建流程：拉取主权重 → 下载 mmproj → 用 ADAPTER 组合创建
-      # mmproj 来源：bartowski/deepreinforce-ai_Ornith-1.0-9B-GGUF（HuggingFace）
+      # ornith-vision: 9B + mmproj 视觉投影器（Q8_0 主权重 + mmproj，VLM 视觉用）
+      # 创建流程：拉取 Q8_0 主权重 → 下载 mmproj → 用 ADAPTER 组合创建
+      # 注意：主权重用 Q8_0（和 ornith-9b 一致），mmproj 来自 bartowski 仓库
       MMPROJ_DIR="${HOME}/ornith-vision-build"
       MMPROJ_FILE="${MMPROJ_DIR}/mmproj-f16.gguf"
       MMPROJ_URL="https://huggingface.co/bartowski/deepreinforce-ai_Ornith-1.0-9B-GGUF/resolve/main/mmproj-deepreinforce-ai_Ornith-1.0-9B-f16.gguf?download=true"
       MMPROJ_SIZE=918165728  # 校验字节数
 
-      # 先确保 Q5_K_M 基础权重存在
-      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_VISION_Q5"; then
-        echo "  ⏳ 拉取 $ORNITH_VISION_Q5（6.5GB，Q5_K_M 量化，视觉版基础）..."
-        if ollama pull "$ORNITH_VISION_Q5"; then
-          echo "  ✅ Ornith Q5_K_M 拉取完成"
+      # Q8_0 基础权重在上面 ornith-9b 步骤已拉取，这里复用
+      # （如果上面没拉成功，这里再检查一次）
+      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_Q8"; then
+        echo "  ⏳ 拉取 $ORNITH_Q8（9.5GB，Q8_0 量化，视觉版基础）..."
+        if ollama pull "$ORNITH_Q8"; then
+          echo "  ✅ Ornith Q8_0 拉取完成"
         else
-          echo "  ❌ Ornith Q5_K_M 拉取失败，请手动运行: ollama pull $ORNITH_VISION_Q5"
+          echo "  ❌ Ornith Q8_0 拉取失败，请手动运行: ollama pull $ORNITH_Q8"
         fi
       else
-        echo "  ✅ $ORNITH_VISION_Q5 已存在"
+        echo "  ✅ $ORNITH_Q8 已存在（复用 ornith-9b 的基础权重）"
       fi
 
       # 下载 mmproj 视觉投影器（如果不存在）
@@ -210,20 +210,20 @@ else
         NEED_VISION_RECREATE=1
       fi
 
-      # 创建/重建 ornith-vision:latest（Q5_K_M + mmproj）
-      if [ "$NEED_VISION_RECREATE" -eq 1 ] && [ -f "$MMPROJ_FILE" ] && ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_VISION_Q5"; then
+      # 创建/重建 ornith-vision:latest（Q8_0 + mmproj）
+      if [ "$NEED_VISION_RECREATE" -eq 1 ] && [ -f "$MMPROJ_FILE" ] && ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_Q8"; then
         MODFILE=$(mktemp /tmp/ornith_vision_modelfile.XXXXXX)
-        echo "FROM $ORNITH_VISION_Q5" > "$MODFILE"
+        echo "FROM $ORNITH_Q8" > "$MODFILE"
         echo "ADAPTER $MMPROJ_FILE" >> "$MODFILE"
         echo 'PARAMETER temperature 0.6' >> "$MODFILE"
         echo 'PARAMETER top_p 0.95' >> "$MODFILE"
         echo 'PARAMETER top_k 20' >> "$MODFILE"
         if ollama create ornith-vision:latest -f "$MODFILE"; then
-          echo "  ✅ ornith-vision:latest 已创建（Q5_K_M + mmproj，7.4GB）"
+          echo "  ✅ ornith-vision:latest 已创建（Q8_0 + mmproj，~10.4GB）"
         else
           echo "  ❌ ornith-vision:latest 创建失败"
           echo "     手动创建:"
-          echo "     echo 'FROM $ORNITH_VISION_Q5' > /tmp/Modelfile.vision"
+          echo "     echo 'FROM $ORNITH_Q8' > /tmp/Modelfile.vision"
           echo "     echo 'ADAPTER $MMPROJ_FILE' >> /tmp/Modelfile.vision"
           echo "     ollama create ornith-vision:latest -f /tmp/Modelfile.vision"
         fi
