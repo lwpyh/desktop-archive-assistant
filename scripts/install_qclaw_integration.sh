@@ -2,6 +2,7 @@
 # install_qclaw_integration.sh — 一键把 desktop-archive-assistant 装好并集成到 qclaw
 #
 # 在目标机器上跑一次，自动完成：
+#   0. 检查并拉取 ollama 模型（ornith-9b Q8_0 9.5GB + ornith-vision + qwen3.5:4b）
 #   1. 装 Python 依赖（pip install -r requirements.txt）
 #   2. 装 archive 命令到 ~/.local/bin（自动改 SKILL_DIR 路径 + 加到 PATH）
 #   3. 同步 SKILL.md → ~/.qclaw/skills/desktop-archive-assistant/
@@ -10,10 +11,14 @@
 #   6. 安全 merge openclaw.json（添加 desktop-archiver agent + 启用 skill）
 #
 # 用法（在 desktop-archive-assistant 目录下）：
-#   bash scripts/install_qclaw_integration.sh              # 默认检测
-#   bash scripts/install_qclaw_integration.sh --force       # 覆盖已有规则文件 + 重装依赖
-#   bash scripts/install_qclaw_integration.sh --skip-pip    # 跳过 pip 安装
-#   bash scripts/install_qclaw_integration.sh --skip-config # 跳过 openclaw.json merge
+#   bash scripts/install_qclaw_integration.sh                 # 默认检测
+#   bash scripts/install_qclaw_integration.sh --force         # 覆盖已有规则文件 + 重装依赖
+#   bash scripts/install_qclaw_integration.sh --skip-pip      # 跳过 pip 安装
+#   bash scripts/install_qclaw_integration.sh --skip-models    # 跳过 ollama 模型拉取
+#   bash scripts/install_qclaw_integration.sh --skip-config   # 跳过 openclaw.json merge
+#
+# ⚠️ 重要：全新机器首次部署时，请先从 qclaw「专家广场」安装任意一个其他专家，
+#    再跑此脚本。否则 qclaw 启动时会覆盖 openclaw.json，导致 desktop-archiver agent 消失。
 #
 # 幂等：可重复跑，不会破坏已有配置。
 set -euo pipefail
@@ -29,11 +34,13 @@ SKILL_SYNC="${QCLAW_HOME}/skills/desktop-archive-assistant"
 FORCE=0
 SKIP_PIP=0
 SKIP_CONFIG=0
+SKIP_MODELS=0
 for arg in "$@"; do
   case "$arg" in
-    --force)       FORCE=1 ;;
-    --skip-pip)    SKIP_PIP=1 ;;
-    --skip-config) SKIP_CONFIG=1 ;;
+    --force)        FORCE=1 ;;
+    --skip-pip)     SKIP_PIP=1 ;;
+    --skip-config)  SKIP_CONFIG=1 ;;
+    --skip-models)  SKIP_MODELS=1 ;;
     *) echo "unknown arg: $arg"; exit 1 ;;
   esac
 done
@@ -54,6 +61,106 @@ fi
 if ! command -v python3 >/dev/null 2>&1; then
   echo "❌ 未找到 python3，请先安装 Python 3.10+"
   exit 1
+fi
+
+# ---------- 0.5 拉 ollama 模型（ornith + qwen3.5）----------
+echo "[0/6] 检查并拉取 ollama 模型"
+if [ "$SKIP_MODELS" -eq 1 ]; then
+  echo "  ⏭️  --skip-models，跳过"
+else
+  if ! command -v ollama >/dev/null 2>&1; then
+    echo "  ⚠️  未安装 ollama，请先运行: curl -fsSL https://ollama.com/install.sh | sh"
+    echo "      装完后手动拉模型:"
+    echo "      ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"
+    echo "      ollama pull qwen3.5:4b"
+  else
+    # 确认 ollama 服务在跑
+    if ! ollama list >/dev/null 2>&1; then
+      echo "  ⚠️  ollama 服务未启动，尝试启动..."
+      ollama serve >/dev/null 2>&1 &
+      sleep 3
+    fi
+
+    if ollama list >/dev/null 2>&1; then
+      echo "  ollama 服务正常"
+
+      # 检查并拉取模型
+      pull_if_missing() {
+        local model="$1"
+        local desc="$2"
+        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$model"; then
+          echo "  ✅ $model 已存在（$desc）"
+        else
+          echo "  ⏳ 拉取 $model（$desc）..."
+          echo "     这可能需要几分钟到几十分钟，取决于网速"
+          if ollama pull "$model"; then
+            echo "  ✅ $model 拉取完成"
+          else
+            echo "  ❌ $model 拉取失败，请手动运行: ollama pull $model"
+          fi
+        fi
+      }
+
+      # ornith-9b: 9B 文本模型（Q8_0 量化，9.5GB，qclaw 交互用）
+      # 从 HuggingFace 仓库拉取，再创建别名 ornith-9b:latest
+      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-9b:latest"; then
+        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"; then
+          echo "  ✅ hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0 已存在"
+        else
+          echo "  ⏳ 拉取 Ornith-1.0-9B-GGUF:Q8_0（9.5GB，Q8_0 量化）..."
+          if ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0; then
+            echo "  ✅ Ornith-1.0-9B Q8_0 拉取完成"
+          else
+            echo "  ❌ Ornith Q8_0 拉取失败，请手动运行:"
+            echo "     ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"
+          fi
+        fi
+        # 创建别名 ornith-9b:latest
+        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0"; then
+          printf 'FROM hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0\n' | ollama create ornith-9b:latest -f - 2>/dev/null && \
+            echo "  ✅ 别名 ornith-9b:latest 已创建" || \
+            echo "  ℹ️  别名创建失败，可手动: printf 'FROM hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q8_0\\n' | ollama create ornith-9b:latest -f -"
+        fi
+      else
+        echo "  ✅ ornith-9b:latest 已存在（qclaw 交互模型）"
+      fi
+
+      # ornith-vision: 9B + mmproj 视觉投影器（Q5_K_M，7.4GB，VLM 视觉用）
+      # 注意：ornith-vision 用 Q5_K_M 量化 + 456M mmproj，是视觉版
+      if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision:latest"; then
+        if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"; then
+          echo "  ✅ hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M 已存在"
+        else
+          echo "  ⏳ 拉取 Ornith-1.0-9B-GGUF:Q5_K_M（6.5GB，Q5_K_M 量化，视觉版基础）..."
+          if ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M; then
+            echo "  ✅ Ornith Q5_K_M 拉取完成"
+          else
+            echo "  ❌ Ornith Q5_K_M 拉取失败，请手动运行:"
+            echo "     ollama pull hf.co/deepreinforce-ai/Ornith-1.0-9B-GGUF:Q5_K_M"
+          fi
+        fi
+        # ornith-vision 需要额外创建（加 mmproj 视觉投影器）
+        # 如果 HuggingFace 上有现成的 vision 版本，直接拉；否则需要从 Q5_K_M + mmproj 创建
+        echo "  ⏳ 尝试拉取现成 ornith-vision..."
+        if ollama pull ornith-vision 2>/dev/null; then
+          echo "  ✅ ornith-vision:latest 拉取完成"
+        else
+          echo "  ℹ️  ornith-vision 无现成包，需从 Q5_K_M 创建（需要 mmproj 文件）"
+          echo "     如需视觉模型，可参考本机配置手动创建，或直接用 qwen3.5:4b（原生支持 vision）"
+        fi
+      else
+        echo "  ✅ ornith-vision:latest 已存在（VLM 视觉模型）"
+      fi
+
+      # qwen3.5:4b: 4B 视觉模型（3.4GB，轻量级 VLM，差机器推荐）
+      pull_if_missing "qwen3.5:4b" "3.4GB，轻量级视觉模型，差机器推荐"
+
+      echo "  ✅ 模型检查完成"
+    else
+      echo "  ❌ ollama 服务无法启动，请手动运行: ollama serve &"
+      echo "     然后重跑此脚本或手动拉模型"
+    fi
+  fi
 fi
 
 # ---------- 1. 装 Python 依赖 ----------
