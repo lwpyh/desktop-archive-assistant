@@ -5,6 +5,10 @@ description: |
   直接用本 skill 的子命令替代 10 行 shell。每个子命令内部自动调 VLM 看图归类、安全移动（进回收站可回滚），
   比你手写 shell 准得多、省事得多。
   
+  ⚠️【最高优先·会话启动协议】收到任何整理/归档/分类/改名/照片/视频相关请求时，
+  第一个动作必须是用 read_file 读取本 SKILL.md 的完整内容（路径见下方 location），
+  读完之前不回复任何方案、不调用任何工具、不自跑 shell。
+  
   基础格式：python3 -m archive_assistant.cli.main <子命令> <目录> [参数]
   
   常用子命令：
