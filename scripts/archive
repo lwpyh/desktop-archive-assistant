@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# archive — 桌面整理超短入口（装到 /usr/local/bin/archive）
+# 用法：
+#   archive "整理桌面"                 # 整理桌面（默认 ~/Desktop，直接执行）
+#   archive "整理桌面" ~/Downloads     # 整理指定目录
+#   archive "回滚"                      # 撤销上次操作
+#   archive list                        # 列出所有可识别意图
+#
+# 设计目的：让对话模型一条命令完成整理，不用自己写 mv/cp/mkdir。
+# 内部调 skill 的 auto 流程（含 VLM 看图归类、安全移动、可回滚）。
+set -e
+
+SKILL_DIR="/Users/jian/desktop-archive-assistant"
+
+# 无参数 → 打印用法
+if [ $# -eq 0 ]; then
+  echo "用法: archive \"<意图>\" [目录]"
+  echo "  archive \"整理桌面\"            # 整理桌面（默认 ~/Desktop）"
+  echo "  archive \"整理桌面\" ~/Downloads # 整理指定目录"
+  echo "  archive \"回滚\"                 # 撤销上次操作"
+  echo "  archive list                    # 列出所有意图"
+  echo ""
+  echo "意图示例: 整理桌面 / 照片按日期归档 / 照片去重 / 视频按内容改名 /"
+  echo "          图片转PPT / 多图拼接 / 图音合成视频 / 视频分发 / 排列桌面图标 /"
+  echo "          回滚 / 清理临时文件 / 定时整理 / 表格清洗 / 汇总成表 / 整理成word / pdf合并 / pdf拆分"
+  exit 0
+fi
+
+cd "$SKILL_DIR"
+
+# list → 列出意图
+if [ "$1" = "list" ] || [ "$1" = "--list" ]; then
+  exec python3 -m archive_assistant.cli.main auto --list-intents
+fi
+
+# 第一个参数是意图，第二个（可选）是目录
+INTENT="$1"
+ROOT="${2:-$HOME/Desktop}"
+
+# 回滚特殊处理（不需要 --root）
+if [ "$INTENT" = "回滚" ] || [ "$INTENT" = "rollback" ]; then
+  exec python3 -m archive_assistant.cli.main auto "回滚" --execute --apply
+fi
+
+exec python3 -m archive_assistant.cli.main auto "$INTENT" --root "$ROOT" --execute --apply

@@ -1,0 +1,73 @@
+# Desktop Archive Assistant Config
+
+vlm:
+  backend: "ollama"                      # ollama | transformers
+  # --- ollama 后端：复用本地 ollama 服务里的模型，不下载 HF 权重 ---
+  ollama:
+    host: "http://127.0.0.1:11434"
+    model: "qwen3.5:4b"                   # qwen3.5-4b（含 vision 能力，已用 ollama show 验证）"ornith-vision"， "qwen3.5:4b" 
+    timeout: 180
+    # 图片识别(caption/OCR)与批量逐图请求的并发数。客户端并发只在 ollama 服务端
+    # 也允许并行时才真正提速：请同时设置环境变量 OLLAMA_NUM_PARALLEL>=该值
+    # （如 `OLLAMA_NUM_PARALLEL=8 ollama serve`），否则请求会在服务端排队。
+    # ornith-vision = ornith-9b 主权重(Q5_K_M) + mmproj 视觉投影器(456M)，
+    # 复用 qclaw 交互模型 ornith-9b 同一份权重，用户无需额外下 qwen3.5。
+    # 比 qwen3.5:9b 更擅长 OCR/理解（reasoning 微调），但带 thinking 输出较慢。
+    concurrency: 4
+  # --- transformers 后端（backend=transformers 时生效）---
+  model_id: "Qwen/Qwen3.5-4B"
+  # 跨平台：用 ~ 相对路径，找不到本地权重时自动回退 model_id 下载。
+  # 如需固定本地路径，改为绝对路径即可。
+  local_dir: "~/models/Qwen3.5-4B"
+  device: "auto"                         # auto | cpu | cuda | mps(Apple Silicon)
+  dtype: "bfloat16"                      # NVIDIA(H20) 原生支持 bf16；ROCm/Win 上需改回 float16
+  quantization: ""                       # ""|4bit|8bit（仅 cuda 生效，需 bitsandbytes，省显存提吞吐）
+  attn_implementation: ""                # ""|flash_attention_2（装了 flash-attn 时填，省时延）
+  max_new_tokens: 512
+  max_image_edge: 512                    # 喂 VLM 前把图最长边缩到该值，降 visual token 提速；<=0 关闭
+  enable_thinking: false                 # 关掉 think 输出，归档场景不需要
+  max_reps_per_cluster: 6                # 每个 cluster 送进 VLM 的代表样本上限
+  max_files_per_call: 80                 # 桌面主题归类：单次送进 VLM 的文件数上限（超出分批）
+
+embedding:
+  text_model: "BAAI/bge-small-zh-v1.5"
+  similarity_threshold:
+    desktop_text: 0.62                   # 余弦相似度 >= 该阈值视为同 cluster
+
+clustering:
+  desktop:
+    time_window_hours: 72                # 同一时间窗口内的文件优先聚一起
+    min_cluster_size: 2
+    max_themes: 8                        # VLM 主题归类时建议的最大主题数
+
+executor:
+  log_dir: "~/.archive_assistant/log"
+  trash_dir: "~/.archive_assistant/trash"   # 回收站：重复/废弃文件移入此处，绝不硬删除
+  duplicate_dir_name: "_duplicates"
+  default_dry_run: true
+
+# 快捷方式/别名：绝对不动，不扫描、不路由、不移动
+skip_extensions:
+  - "lnk"        # Windows 快捷方式
+  - "app"        # macOS 应用
+  - "url"        # 网址快捷方式
+  - "webloc"     # macOS 网址书签
+  - "desktop"    # Linux 快捷方式
+
+# 系统文件名：扫描时跳过
+skip_filenames:
+  - "desktop.ini"
+  - "Thumbs.db"
+  - ".DS_Store"
+  - ".localized"
+
+# 不常用文件检测：最后访问超过此天数 → 归入"不常用文件"
+infrequent_threshold_days: 60
+
+# 桌面归档：先用规则把这些扩展名直接路由，避免无谓聚类
+desktop_routing_rules:
+  installers: ["dmg", "pkg", "exe", "msi", "deb", "rpm", "AppImage"]
+  archives:   ["zip", "tar", "tar.gz", "tgz", "rar", "7z"]
+  videos:     ["mp4", "mov", "mkv", "avi", "webm"]
+  audios:     ["mp3", "wav", "flac", "m4a", "aac"]
+  # 其余 -> 进入聚类

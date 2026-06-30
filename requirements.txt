@@ -1,0 +1,38 @@
+# Core
+PyYAML>=6.0
+Pillow>=10.0.0
+numpy>=1.24,<2.0
+tqdm>=4.65
+
+# Desktop feature extraction
+pypdf>=4.0                 # PDF 文本抽取
+python-docx>=1.1           # docx
+pytesseract>=0.3.10        # OCR fallback（系统需装 tesseract）
+
+# 照片/视频/像册整理（photo_capabilities）
+imagehash>=4.3             # 感知哈希(pHash) 视觉相似去重
+python-pptx>=0.6.23        # 图片批量转 PPT
+imageio-ffmpeg>=0.4.9      # 图片+音频合成视频：自带跨平台静态 ffmpeg 二进制，零系统依赖
+                          #   （系统若已装 ffmpeg 会优先用系统版；否则自动回退到此内置二进制）
+
+# Office 文档/表格（office_capabilities）
+pandas>=2.0                # 表格清洗/筛选/去重/汇总（table_clean/table_merge）
+openpyxl>=3.1             # xlsx 读写引擎（pandas 后端）
+docxtpl>=0.17             # Word 模板填充（docx_compose 模板模式，可选）
+# pypdf / python-docx 已在上方声明（PDF 合并拆分 / Word 写入复用）
+
+# VLM（核心引擎）
+# 默认后端为 ollama（见 config.yaml: vlm.backend=ollama）：复用本地 ollama 服务里的
+# 多模态模型（如 qwen3.5:4b），不下载任何 HF 权重，下面这些 torch/transformers 全部「不需要」。
+# 仅当你把 vlm.backend 切回 "transformers" 时，才需要解开下面注释安装本地推理栈：
+#   注意 Qwen3.5-4B 架构为 qwen3_5，对 transformers 版本极敏感（见 docs/QWEN_VISION_DIAGNOSIS.md）：
+#     <5.0 加载报错 / 5.6.0 ✅视觉正常 / 5.12.x 视觉回归
+# torch>=2.1
+# transformers==5.6.0
+# huggingface-hub>=1.0
+# accelerate>=0.30
+# qwen-vl-utils>=0.0.10
+
+# CLI
+typer>=0.12
+rich>=13.7
