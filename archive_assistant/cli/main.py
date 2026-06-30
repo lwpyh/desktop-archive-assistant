@@ -75,6 +75,7 @@ from ..capabilities import (
     capability_sync,
     capability_inspect,
     capability_move,
+    capability_move_path,
     capability_clean,
     capability_backup,
     capability_plan,
@@ -356,10 +357,35 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 
 # ============================================================
-# move — 批量移动
+# move — 移动文件/文件夹（单路径 or 批量按 pattern）
 # ============================================================
 
 def cmd_move(args: argparse.Namespace) -> int:
+    # 模式2：单文件/文件夹移动（指定 --src 源路径）
+    if getattr(args, "src", None):
+        cfg = load_config(args.config)
+        log_dir = cfg["executor"]["log_dir"]
+        r = capability_move_path(
+            args.src, args.to, dry_run=not args.apply, log_dir=log_dir,
+            merge=getattr(args, "merge", False),
+        )
+        if r.get("error"):
+            print(f"[move] error: {r['error']}")
+            return 1
+        kind = r.get("type", "file")
+        status = "merged" if r.get("merged") else ("moved" if r.get("moved") else "would move")
+        n_files = len(r.get("moves", [])) if r.get("moves") else (1 if r.get("moved") else 0)
+        if r.get("merged"):
+            print(f"\n📦 {status} {kind} ({n_files} files): {r['src']} → {r['dst']}")
+        else:
+            print(f"\n📦 {status} {kind}: {r['src']} → {r['dst']}")
+        if not args.apply:
+            print("\n（以上为预览；去掉 --dry-run 即真正执行）")
+        elif r.get("log_path"):
+            print(f"已记录日志，可回滚：python -m archive_assistant.cli.main rollback --last")
+        return 0
+
+    # 模式1：批量按 pattern 移动（原有逻辑）
     ext_filter = args.ext.split(",") if args.ext else None
     results = capability_move(
         args.root, match=args.match, to=args.to,
@@ -1078,12 +1104,14 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--since", type=float, default=24, help="hours to look back")
     ins.set_defaults(func=cmd_inspect)
 
-    # move
-    mv = sub.add_parser("move", help="批量移动文件")
-    mv.add_argument("root", help="dir to move from")
-    mv.add_argument("--match", required=True, help="filename pattern, e.g. *.lnk")
-    mv.add_argument("--to", required=True, help="destination dir")
-    mv.add_argument("--ext", default=None, help="comma-separated extensions")
+    # move（支持两种模式：单文件/文件夹移动 or 批量按 pattern 移动）
+    mv = sub.add_parser("move", help="移动文件/文件夹（--src 单路径 or --match 批量）")
+    mv.add_argument("root", help="源目录（批量模式用）或忽略（--src 模式）", nargs="?", default=".")
+    mv.add_argument("--src", default=None, help="要移动的单个文件/文件夹完整路径（指定后走单路径模式）")
+    mv.add_argument("--match", default=None, help="批量模式：文件名通配符，如 *.lnk")
+    mv.add_argument("--to", required=True, help="目标目录")
+    mv.add_argument("--ext", default=None, help="批量模式：逗号分隔的扩展名过滤")
+    mv.add_argument("--merge", action="store_true", help="--src 模式：目标已存在同名文件夹时合并内容（而非加后缀）")
     mv.add_argument("--dry-run", dest="apply", action="store_false", help="只预览不执行（默认直接执行）")
     mv.set_defaults(func=cmd_move)
 

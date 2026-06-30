@@ -2,22 +2,28 @@
 name: desktop-archive-assistant
 description: |
   【桌面/文件整理·一条命令搞定】用户要整理桌面/文件/照片/视频时，别自己写 mv/cp/mkdir/find（又长又容易错），
-  直接用这个 1 条命令替代 10 行 shell：
-  archive "<意图>" [目录]
-  它内部自动调 VLM 看图归类、安全移动（进回收站可回滚），比你手写 shell 准得多、省事得多。
-  <意图>取值：整理桌面 / 照片按日期归档 / 照片去重 / 视频按内容改名 / 图片转PPT / 多图拼接 / 图音合成视频 / 视频分发 / 排列桌面图标 / 回滚 / 清理临时文件 / 定时整理 / 表格清洗 / 汇总成表 / 整理成word / pdf合并 / pdf拆分 / 按类型分类 / 按内容分类 / 按关键词分类 / 平铺子目录 / 表格拆分 / 图片格式转换 / 打包zip / 解压zip。
-  示例：
-    archive "整理桌面"                    # 整理 ~/Desktop（默认）
-    archive "整理桌面" ~/Downloads        # 整理指定目录
-    archive "照片按日期归档" ~/Pictures    # 照片归档
-    archive "视频按内容改名" ~/Movies       # 视频改名
-    archive "回滚"                         # 撤销上次操作
+  直接用本 skill 的子命令替代 10 行 shell。每个子命令内部自动调 VLM 看图归类、安全移动（进回收站可回滚），
+  比你手写 shell 准得多、省事得多。
+  
+  基础格式：python3 -m archive_assistant.cli.main <子命令> <目录> [参数]
+  
+  常用子命令：
+    organize ~/Desktop                    # 整理桌面（全流程：扫描→归类→执行→排列图标）
+    archive-by-date ~/Photos              # 照片按拍摄日期归档
+    dedupe ~/Photos --method phash        # 照片去重
+    classify ~/Photos                      # 自动按内容归类（VLM 自动生成类别）
+    classify-into ~/Photos --categories "风景,人物,美食"  # 指定类别归类（不匹配的进"其他"文件夹）
+    video-rename-title --ai ~/Videos       # 视频按内容改名（VLM 抽帧看画面起名）
+    extract ~/Photos --mode ocr --vlm-ocr  # 图片 OCR 识字
+    rollback --last                        # 撤销上次操作
+    sort ~/Desktop                         # 排列桌面图标
+  
   执行后把输出原样转述给用户即可，不要自己编"已整理完成"。
-  注意：禁止自己用 mv/cp/mkdir/find 整理——用 archive 命令才正确、才安全、才省事。
-description_zh: "桌面整理专家：执行 auto 命令整理桌面/照片/视频，禁止自己跑 shell 整理"
-description_en: "Desktop organizer: run `auto` command to organize files/photos/videos, never shell out manually"
+  注意：禁止自己用 mv/cp/mkdir/find 整理——用子命令才正确、才安全、才省事。
+description_zh: "桌面整理专家：直接选子命令整理桌面/照片/视频，禁止自己跑 shell 整理"
+description_en: "Desktop organizer: pick subcommands directly to organize files/photos/videos, never shell out manually"
 location: plugin
-version: 0.6.0
+version: 0.7.0
 metadata:
   openclaw:
     always: true
@@ -30,129 +36,189 @@ entrypoints:
 
 # Desktop Archive Assistant — 桌面文件整理助手
 
-## ⚠️ SYSTEM RULES — 强制执行，不可跳过（4B 小模型必读）
+## ⚠️ SYSTEM RULES — 强制执行
 
-**你是一个路由器，不是执行器。** 任何涉及"整理/归档/分类/整理桌面/照片/视频"的任务，
-**绝对禁止自己用 exec 跑 mv/cp/mkdir 之外的 shell 命令去整理文件**，也**禁止自己判断文件类型后手动归类**。
-你**唯一该做的事**是把用户意图映射到下方的命令表，然后调用 `auto` 子命令执行：
+**你直接选子命令执行，不要手写 shell。** 任何涉及"整理/归档/分类/照片/视频"的任务，
+**绝对禁止自己用 exec 跑 mv/cp/mkdir/find**——用下方的子命令，内部自动调 VLM 看图归类、安全移动（可回滚）。
 
+**基础格式：**
 ```bash
-cd /Users/jian/desktop-archive-assistant && python3 -m archive_assistant.cli.main auto "标准化意图词" --root <目录>
+cd /Users/jian/desktop-archive-assistant && python3 -m archive_assistant.cli.main <子命令> <目录> [参数]
 ```
 
-**强制流程（每次都必须走，不可省略）：**
-1. 收到用户请求 → 从下方"工具清单"选最接近的意图词
+**强制流程：**
+1. 收到用户请求 → 从下方"命令速查表"选最接近的子命令
 2. 确定目标目录（默认 `~/Desktop`，用户指定了就用指定的）
-3. 调用 `exec` 工具执行上面的 `auto` 命令
+3. 调用 `exec` 工具执行命令
 4. 把命令输出原样转述给用户，**不要自己编造"已整理完成"等结论**
 
-**绝对禁止的行为（违反即错误）：**
-- ❌ 自己用 `mv`/`cp`/`mkdir` 整理文件（skill 内部会安全地做，你不需要管）
+**绝对禁止：**
+- ❌ 自己用 `mv`/`cp`/`mkdir`/`find` 整理文件
 - ❌ 自己判断"这是视频、这是图片"然后手动归类
 - ❌ 在命令没真正成功时回复"✅ 已整理完成"（必须看命令真实输出）
 - ❌ 用 `~/桌面` 这种错误路径（macOS 桌面是 `~/Desktop`）
 
-**为什么这样设计：** skill 内部有专门的 VLM（Qwen3.5-4B）做图片识别、主题归类、视频命名，
-比你直接跑 shell 准确得多，且删除会进回收站可回滚。你的路由 + skill 内部执行 = 最佳结果。
-你只做路由，skill 干活。
+> **弱模型 fallback**：如果你拿不准该选哪个子命令，可以用 `auto "<用户原话>" --root <目录>` 让路由器自动匹配。但强模型应优先直接选子命令，更快更准。
 
-## ⚡ 快速使用（推荐，所有模型通用）
+## 📋 命令速查表（意图→子命令直接对照）
 
-**你不需要记忆 38 个子命令。** 只需把用户的原话传给 `auto`，它自动识别意图、选择命令、给出建议：
+| 用户意图 | 子命令 | 说明 |
+|---------|--------|------|
+| 整理桌面 / 桌面太乱 | `organize ~/Desktop` | 全流程：扫描→归类→执行→排列图标 |
+| 照片按日期归档 | `archive-by-date ~/Photos` | 按 EXIF 拍摄日期到 年/月/日 三级目录 |
+| 照片去重 | `dedupe ~/Photos --method phash` | 感知哈希去重，视觉相似也识别 |
+| 文件去重（哈希） | `dedupe ~/Downloads --method hash` | 完全相同才判定重复 |
+| **自动按内容分类** | `classify ~/Photos` | VLM 自动生成类别并归类（无需指定类别） |
+| **指定类别分类** | `classify-into ~/Photos --categories "风景,人物,美食"` | 按给定类别归类，不匹配的进"其他"文件夹 |
+| 按关键词分类 | `classify-rules ~/Downloads` | 按关键词规则归类（确定性，零成本） |
+| 按类型/扩展名/月份分组 | `group-by ~/Downloads` | 按类型/扩展名/日期/首字母分组 |
+| 视频改名（规则清洗） | `video-rename-title ~/Videos` | 去下划线/括号/#标签，不抽帧 |
+| **视频按内容改名** | `video-rename-title --ai ~/Videos` | VLM 抽帧→看画面→AI 起名 |
+| 图片按文字改名 | `image-rename-by-ocr ~/Photos` | VLM OCR 识字→取关键词作文件名 |
+| 图片 OCR 识字 | `extract ~/Photos --mode ocr --vlm-ocr` | 输出每图文字到 csv |
+| 图片内容描述 | `extract ~/Photos --mode caption` | 一句话描述每张图 |
+| 图片转 PPT | `to-ppt ~/Photos` | 每张一页居中铺满 |
+| 多图拼接 | `collage ~/Photos` | 多图拼成一张（A4/网格） |
+| 图音合成视频 | `video-compose ~/Photos` | 图片+音频→视频 |
+| 视频分发 | `video-distribute ~/Videos` | 按数量分发到多个子文件夹 |
+| 排列桌面图标 | `sort ~/Desktop` | 消除空位/按类型排序 |
+| **移动文件/文件夹** | `move --src <源路径> --to <目标目录>` | 移动单个文件或文件夹（走执行器，可回滚） |
+| **合并文件夹（冲突时）** | `move --src <源文件夹> --to <目标目录> --merge` | 目标已有同名文件夹时合并内容（文件冲突加后缀，绝不覆盖） |
+| 批量移动（按通配符） | `move <目录> --match "*.jpg" --to <目标>` | 按文件名 pattern 批量移动 |
+| 清理临时文件 | `clean ~/Desktop --temp --empty-dirs` | 清理临时/空目录 |
+| 定时整理 | `schedule ~/Desktop` | cron 定时任务 |
+| 表格清洗 | `table-clean <file.xlsx>` | 列筛选/去重/空值清洗 |
+| 汇总成表 | `table-merge ~/files` | 多文件汇总成一个表 |
+| 整理成 Word | `docx-compose` | 清单/资料整理成 Word |
+| PDF 合并 | `pdf-ops merge` | 多 PDF 合一 |
+| PDF 拆分 | `pdf-ops split` | PDF 拆多份 |
+| 平铺子目录 | `flatten ~/Downloads` | 子目录文件提到顶层 |
+| 表格按列拆分 | `table-split <file.xlsx>` | 按某列值拆成多文件 |
+| 图片格式转换 | `convert ~/Photos` | 批量转 jpg/png/webp/压缩 |
+| 打包 zip | `pack ~/folder` | 打包成 zip |
+| 解压 zip | `unpack <file.zip>` | 解压（含 zip-slip 防护） |
+| 回滚 / 撤销 | `rollback --last` | 撤销上次操作 |
+
+> **默认直接执行**：以上命令不加额外参数即为真正执行（可 `rollback --last` 撤销）。加 `--dry-run` 只预览不改文件。
+
+## 📁 照片/文件分类：两种模式（重要）
+
+### 模式 1：自动按内容分类（VLM 自动生成类别）
+
+用户说"按内容分类"/"自动分类"/"按主题分" → 用 `classify`，**不需要给类别**，VLM 自己看内容生成类别：
 
 ```bash
-python -m archive_assistant.cli.main auto "用户的原始请求" --root <目录>
+python3 -m archive_assistant.cli.main classify ~/Photos
 ```
 
-### 用户说了什么 → 你运行什么
+VLM 会扫描所有文件 → 看图片画面/读文档正文 → 自动聚类生成文件夹名 → 移入对应文件夹。
+适合：不知道有哪些类别、想让 AI 自己判断的场景。
 
-| 用户说的话 | 你运行的命令 |
-|----------|------------|
-| "整理桌面" / "桌面太乱了" | `auto "整理桌面" --root ~/Desktop` |
-| "照片按日期归档" / "照片按年整理" | `auto "照片按日期归档" --root ~/Photos` |
-| "照片去重" / "删重复照片" | `auto "照片去重" --root ~/Photos` |
-| "视频标题重命名" / "改视频名" | `auto "视频标题重命名" --root ~/Videos` |
-| "图片转PPT" / "照片做PPT" | `auto "图片转PPT" --root ~/Photos` |
-| "多图拼接" / "照片拼一张" | `auto "多图拼接" --root ~/Photos` |
-| "图片配音乐做视频" | `auto "图音合成视频" --root ~/Photos` |
-| "视频分发到5个文件夹" | `auto "视频分发" --root ~/Videos` |
-| "排列桌面图标" | `auto "排列桌面图标" --root ~/Desktop` |
-| "回滚" / "撤销" / "还原" | `auto "回滚"` |
-| "清理临时文件" | `auto "清理临时文件" --root ~/Desktop` |
-| "定时整理桌面" | `auto "定时整理" --root ~/Desktop` |
-| "表格清洗" / "表格去重" | `auto "表格清洗"` |
-| "多个文件汇总成表" | `auto "汇总成表" --root ~/files` |
-| "整理成Word" / "生成文档" | `auto "整理成word"` |
-| "PDF合并" / "PDF拆分" | `auto "pdf合并"` / `auto "pdf拆分"` |
-| "按类型/扩展名分类" / "按月份归档" / "按首字母分" | `auto "按类型分类" --root <目录>` |
-| "按内容/类别分类" / "按项目/客户/工程类型分" | `auto "按内容分类" --root <目录>` |
-| "按关键词分类" / "发票合同分开放" | `auto "按关键词分类" --root <目录>` |
-| "平铺子目录" / "把文件都提到一层" | `auto "平铺" --root <目录>` |
-| "表格按列拆分" / "拆成多个表" | `auto "表格拆分"` |
-| "图片转jpg/png/webp" / "压缩图片" | `auto "图片格式转换" --root <目录>` |
-| "打包成zip" / "压缩文件夹" | `auto "打包"` |
-| "解压zip" / "解压缩" | `auto "解压"` |
+### 模式 2：指定类别分类（用户给类别列表）
 
-### 执行模式
+用户说"按这些类别分"/"分成 XX、YY、ZZ" → 用 `classify-into`，**给类别列表**，VLM 把每个文件归入最匹配的类别：
 
-| 你想要的 | 命令 | 说明 |
-|---------|------|------|
-| 先看建议命令（不执行） | `auto "请求" --root <目录>` | 安全预览，只输出建议 |
-| 自动执行（dry-run 预览） | `auto "请求" --root <目录> --execute` | 跑一遍但不真正改文件 |
-| 真正执行 | `auto "请求" --root <目录> --execute --apply` | 真正整理，可 rollback |
-| 查看所有可识别意图 | `auto --list-intents` | 列出 34 种意图 |
-| JSON 格式输出 | `auto "请求" --json` | 方便程序化处理 |
-
-### 工作流程（推荐）
-
-```
-1. 用户说需求 → 你运行 auto "需求" --root <目录>（只看建议）
-2. 看 auto 输出的建议命令，确认意图正确
-3. 运行 auto "需求" --root <目录> --execute（dry-run 执行）
-4. 看 dry-run 结果，如果 OK → 运行 auto "需求" --root <目录> --execute --apply
-5. 后悔了 → 运行 auto "回滚"
+```bash
+python3 -m archive_assistant.cli.main classify-into ~/Photos --categories "风景,人物,美食,证件"
 ```
 
-> **整理桌面默认自动排列图标**：`auto "整理桌面" --execute` 流程末尾会自动调用 `sort` 排列桌面图标（删 `.DS_Store` + 重启 Finder，让整理后的文件夹按网格矩阵整齐排列）。预览模式（`--dry-run`）不触发排列，只有真正执行才排列。
+**不匹配的文件自动进"其他"文件夹**（默认文件夹名就是"其他"，可用 `--unmatched "杂项"` 自定义）：
 
-> **VLM 后端默认走本地 ollama**（`config.yaml` → `vlm.backend: ollama`）：直接复用你本机
-> ollama 服务里的多模态模型（默认 `qwen3.5:4b`），**不下载任何 HF 权重、不依赖 transformers**。
-> 只要本机已 `ollama pull qwen3.5:4b` 并启动 ollama，照片识别 / 主题归类 / 视频命名即开箱可用；
-> ollama 不可用时自动降级为规则模式（按文件名/扩展名分类），整理功能不受影响。
+```bash
+# 不匹配的进"其他"（默认行为）
+classify-into ~/Photos --categories "风景,人物,美食"
+
+# 自定义兜底文件夹名
+classify-into ~/Photos --categories "发票,合同,报表" --unmatched "杂项"
+
+# 不匹配的保持不动（不创建"其他"文件夹）
+classify-into ~/Photos --categories "风景,人物" --keep-unmatched
+```
+
+适合：用户明确知道要分哪些类别、想要精确控制的场景。
+
+### 两种模式对比
+
+| | `classify`（自动） | `classify-into`（指定） |
+|---|---|---|
+| 类别来源 | VLM 自动生成 | 用户给定 |
+| 需要给 `--categories` | ❌ 不需要 | ✅ 必须 |
+| 不匹配的文件 | 单独成簇或跳过 | 进"其他"文件夹（可配置） |
+| 适合场景 | 不知道有哪些类别 | 明确知道要分几类 |
+| 速度 | 稍慢（要思考类别） | 较快（从列表选） |
+
+> **classify 先生成 plan 再 apply**：`classify` 只生成计划不执行，需要 `classify ~/Photos` → 看 plan → `apply --plan <plan.json>` 执行。`classify-into` 默认直接执行。
 
 ## 🔍 文本密集图片：先 OCR 再做下游任务（重要，易错）
 
-当图片是 **截图 / 扫描件 / 发票 / 合同 / 文档照片 / 证件 / 票据** 等**文字密集**内容，且用户要基于图片里的文字做下游任务（分类 / 汇总 / 改名 / 检索）时，**必须先用 VLM OCR 把文字识别出来**——不要只用 caption（一句话描述会丢失具体文字）。
+当图片是 **截图 / 扫描件 / 发票 / 合同 / 文档照片 / 证件 / 票据 / 纪念照 / 手写文字照片** 等**文字密集**内容，且用户要基于图片里的文字做下游任务（分类 / 汇总 / 改名 / 检索）时，**必须先用 VLM OCR 把文字识别出来**——不要只用 caption（一句话描述会丢失具体文字，且可能完全识别错误）。
+
+> ⚠️ **典型错误案例**：一张写着"胡健 周慧敏 1982年10月7日 结婚纪念日"的纪念照，用 `--mode caption` 会识别成 "A printed note on a corkboard"（完全错误）；用 `--mode ocr --vlm-ocr` 能正确识字。
 
 **OCR 命令（必须显式 `--mode ocr --vlm-ocr`，才会走 VLM 识字）：**
 
 ```bash
-cd /Users/jian/desktop-archive-assistant && python3 -m archive_assistant.cli.main auto "识别图片文字" --root <目录>   # ❌ 不行：auto 路由到 extract 默认 caption，不识字
-python3 -m archive_assistant.cli.main extract <目录> --mode ocr --vlm-ocr --out ocr_result.csv   # ✅ 正确：VLM OCR，输出每图文字
+python3 -m archive_assistant.cli.main extract <目录> --mode ocr --vlm-ocr --out ocr_result.csv   # ✅ VLM OCR，输出每图文字
 ```
 
-> ⚠️ **不要用 `auto "提取文字"` / `auto "图片文字"` 做文本密集 OCR**：auto 路由到 extract 时默认 `--mode caption`（只描述不识字），且 OCR 默认走 tesseract 回退。文字密集场景**必须显式** `extract --mode ocr --vlm-ocr`。
+> ⚠️ **不要用 `auto "提取文字"` 做文本密集 OCR**：auto 路由到 extract 时默认 `--mode caption`（只描述不识字）。文字密集场景**必须显式** `extract --mode ocr --vlm-ocr`。
 
-**识别场景判断**：用户说"图片里有字/截图/扫描/发票/合同/单据/文档照片"，或图片肉眼可见大量文字 → 走 OCR；用户说"照片拍的什么/风景/人物" → 走 caption。拿不准就 `--mode both`（既描述又识字）。
+**识别场景判断（改名前必看）**：
+- 图片里有**手写文字 / 打印文字 / 中文 / 日期 / 姓名 / 金额 / 表格** → **走 OCR**（`--mode ocr --vlm-ocr`）
+- 图片是**纯风景 / 人物肖像 / 无明显文字** → 走 caption（`--mode caption`）
+- **拿不准就 `--mode both`**（既描述又识字，最安全）
+
+### 图片按内容改名的正确流程
+
+| 图片类型 | 正确做法 | 错误做法 |
+|---------|---------|---------|
+| **文字密集**（截图/纪念照/票据/合同） | `extract --mode ocr --vlm-ocr` → 取识别出的文字改名 | ❌ `extract --mode caption`（会识别错误） |
+| **纯画面**（风景/人物/动物） | `extract --mode caption` → 取描述改名 | ✅ 正确 |
+| **拿不准** | `extract --mode both` → 同时获取 OCR 文字 + caption 描述 | — |
+
+> **关键**：用户说"按内容改名"时，如果图片里有文字，**内容就是文字**——必须走 OCR。只有纯画面图片才走 caption。
 
 **OCR 完成后的下游任务：**
 
 | 下游需求 | 做法 |
 |---|---|
-| 按内容分类 | OCR 文字会被 `classify-into` 自动读取作为归类依据 → `auto "按内容分类" --root <目录> --categories "类别1,类别2"`（也可先 extract 出 ocr_text 再 classify） |
-| 汇总成表 | `extract --mode ocr --vlm-ocr --out result.csv` 直接产出表格，每行一张图+其文字 |
-| 检索/查阅 | extract 出 txt/csv 后，用户可按文字检索图片 |
-| 按文字改名 | `auto "图片按文字改名" --root <目录> --execute` 或 `image-rename-by-ocr <目录>`：VLM OCR 识别每张图文字 → 取关键文字作新文件名 → 走执行器改名（可回滚，不手搓 mv）。无文字的图片跳过不改 |
+| 按内容分类 | `classify-into <目录> --categories "类别1,类别2"`（OCR 文字会被自动读取作为归类依据） |
+| 汇总成表 | `extract --mode ocr --vlm-ocr --out result.csv` 直接产出表格 |
+| 按文字改名 | `image-rename-by-ocr <目录>`：VLM OCR 识别每张图文字 → 取关键文字作新文件名 |
 
-## 安全原则（硬性要求）
+## 🎬 视频改名：两种模式（重要，易混）
 
-1. **dry-run 默认**：不加 `--apply` 只看不改
+`video-rename-title` 有**两种模式**，根据用户意图选择：
+
+| 用户意图 | 命令 | 做什么 |
+|---------|------|--------|
+| "改视频名"/"视频标题重命名" | `video-rename-title <目录>` | **规则清洗**：去下划线/括号/#标签/审核尾巴，不抽帧 |
+| "**按内容改名**"/"**画面**改名"/"**AI**改名" | `video-rename-title --ai <目录>` | **VLM 抽帧→看画面→AI 起名**（ffmpeg 抽 6 帧 → VLM 看图 → 生成内容描述作文件名）|
+
+> **关键区别**：用户说「按**内容**/画面/AI」→ 加 `--ai` 走 VLM；否则走快速规则清洗。
+> 预览加 `--dry-run`（不要加 `--execute` 或 `--apply`，子命令不支持这两个参数）。
+
+## 🛡️ 安全原则（硬性要求）
+
+1. **默认直接执行**：不加额外参数即真正操作（可 `rollback --last` 撤销）
 2. **绝不硬删除**：删除一律移入回收站 `~/.archive_assistant/trash/<ts>/`
-3. **绝不覆盖**：同名冲突自动加 `-1/-2` 后缀
-4. **可回滚**：每次 `--apply` 写日志，`auto "回滚"` 或 `rollback --last` 撤销
+3. **绝不覆盖**：同名冲突自动加 `-1/-2` 后缀；`move --merge` 模式下文件冲突同样加后缀，绝不覆盖目标已有文件
+4. **可回滚**：每次执行写日志，`rollback --last` 撤销
 5. **快捷方式绝对不动**：`.lnk`/`.app`/`.url`/`.webloc`/`.desktop` 自动跳过
 6. **已有文件夹不拆解**：只往里放文件
-7. **输出不污染用户目录**：所有过程性输出（plan.json / report.md / ocr.csv / cleaned.xlsx / merged.xlsx 等）一律写到 `~/.archive_assistant/output/`，**禁止写到被整理的目标目录**。调用时用 `--out ~/.archive_assistant/output/xxx` 指定，或不指定走默认专属目录。只有用户明确要的产出（图片转PPT、拼接图、合成视频）才按用户指定位置输出。执行后被整理目录里不得留下任何新增的非整理产物文件。
+7. **输出不污染用户目录**：所有过程性输出（plan.json / report.md / ocr.csv 等）一律写到 `~/.archive_assistant/output/`，**禁止写到被整理的目标目录**。只有用户明确要的产出（PPT、拼接图、合成视频）才按用户指定位置输出。
+
+## 🔄 auto 路由器（弱模型 fallback）
+
+如果你拿不准该选哪个子命令，可以用 `auto` 让路由器自动匹配：
+
+```bash
+python3 -m archive_assistant.cli.main auto "用户的原始请求" --root <目录>
+```
+
+auto 会用关键词匹配识别意图，输出建议命令。但**强模型应优先直接选子命令**——auto 的关键词匹配较死板，口语化表达可能匹配不准。
+
+查看所有可识别意图：`auto --list-intents`
 
 ## 何时加载本 Skill
 
@@ -161,35 +227,11 @@ python3 -m archive_assistant.cli.main extract <目录> --mode ocr --vlm-ocr --ou
 - "排列桌面图标 / 桌面图标排列"
 - "定时整理桌面"
 - "照片按拍摄日期/年份归档 / 照片去重 / 图片转PPT / 多图拼接"
-- "视频标题重命名 / 图片配音乐做视频 / 视频分发到多个文件夹"
+- "视频标题重命名 / 视频按内容改名 / 图片配音乐做视频 / 视频分发"
 - "表格列筛选/去重/清洗 / 多个文件汇总成表 / 整理成 Word / PDF 合并拆分"
 - "按类型/扩展名/月份/首字母分组 / 按内容或自定义类别分类 / 按关键词归类"
 - "平铺子目录 / 表格按列拆分 / 图片格式转换压缩 / 打包成 zip / 解压 zip"
-- 关键词：`整理桌面 / 归档桌面 / 文件分类 / 照片整理 / 像册整理 / 照片归档 / 照片去重 / 图片转PPT / 视频重命名 / 图音合成 / 表格清洗 / 表格去重 / 汇总成表 / 整理成Word / PDF合并 / PDF拆分 / 按类型分类 / 按内容分类 / 按关键词分类 / 平铺 / 表格拆分 / 图片格式转换 / 打包zip / 解压zip`
-
-## 高级用法（强模型可选）
-
-如果 `auto` 路由的意图不对，或需要精细控制参数，可直接调用具体子命令。
-**完整能力参考请见 `REFERENCE.md`**（38 个能力的详细说明、参数、示例）。
-
-常用子命令速查：
-```bash
-# 整理桌面（全流程）
-python -m archive_assistant.cli.main organize ~/Desktop --out plan.json
-python -m archive_assistant.cli.main apply --plan plan.json
-
-# 照片按日期归档
-python -m archive_assistant.cli.main archive-by-date ~/Photos --apply
-
-# 照片去重（pHash）
-python -m archive_assistant.cli.main dedupe ~/Photos --method phash --apply
-
-# 视频标题重命名
-python -m archive_assistant.cli.main video-rename-title ~/Videos --apply
-
-# 回滚
-python -m archive_assistant.cli.main rollback --last
-```
+- 关键词：`整理桌面 / 归档桌面 / 文件分类 / 照片整理 / 像册整理 / 照片归档 / 照片去重 / 图片转PPT / 视频重命名 / 视频按内容改名 / 图音合成 / 表格清洗 / 表格去重 / 汇总成表 / 整理成Word / PDF合并 / PDF拆分 / 按类型分类 / 按内容分类 / 按关键词分类 / 平铺 / 表格拆分 / 图片格式转换 / 打包zip / 解压zip`
 
 ## 跨平台支持
 
@@ -212,10 +254,10 @@ cd <skill-dir>
 pip install -r requirements.txt
 
 # 2) 准备本地 ollama 多模态模型（仅首次）
-ollama pull qwen3.5:9b
+ollama pull qwen3.5:4b
 
 # 3) 跑通
-python -m archive_assistant.cli.main auto "整理桌面" --root ~/Desktop --execute
+python -m archive_assistant.cli.main organize ~/Desktop
 ```
 
 ### VLM 后端：本地 ollama（默认）

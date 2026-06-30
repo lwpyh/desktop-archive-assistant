@@ -64,13 +64,22 @@ _RULES: List[Dict[str, Any]] = [
         "workflow": ["dedupe --method hash"],
         "needs_root": True,
     },
-    # ---- 视频标题重命名 ----
+    # ---- 视频标题重命名（含按内容/AI改名）----
     {
         "intent": "video_rename",
         "keywords": ["视频重命名", "视频标题", "视频改名", "视频名字", "重命名视频",
-                     "视频标题重命名", "改视频名", "视频文件名"],
+                     "视频标题重命名", "改视频名", "视频文件名",
+                     "视频按内容改名", "视频内容改名", "按视频内容", "视频按画面",
+                     "视频画面改名", "视频识别改名", "视频AI改名",
+                     "视频内容", "按视频内容改名"],
+        # any_all：专治"把视频按【内容】改名"/"按照视频【内容】来改名"等口语——
+        # 只要同时出现"视频类词"+"内容/画面/AI+改名类词"即命中
+        "any_all": [["视频", "mp4", "录像"],
+                    ["按内容改名", "内容改名", "按画面改名", "画面改名",
+                     "AI改名", "识别改名", "智能改名", "自动取名",
+                     "内容来改名", "按内容", "按画面"]],
         "subcommand": "video-rename-title",
-        "desc": "视频标题 AI 重命名（删#标签/括号/审核尾巴，15-25字）",
+        "desc": "视频 AI 重命名（VLM 抽帧看画面起名；默认规则清洗，加 --ai 走内容识别）",
         "workflow": ["video-rename-title"],
         "needs_root": True,
     },
@@ -428,6 +437,15 @@ def route(query: str, root: Optional[str] = None) -> Dict[str, Any]:
     base = "python -m archive_assistant.cli.main"
     wf = rule.get("workflow", [rule["subcommand"]])
 
+    # ---- 自动推断是否需要 AI 模式 ----
+    _AI_TRIGGERS = ["内容", "画面", "识别", "智能", "ai", "自动取名", "vlm",
+                     "按内容", "按画面"]
+    _needs_ai = False
+    if rule["intent"] == "video_rename" and any(t in query.lower() for t in _AI_TRIGGERS):
+        _needs_ai = True
+        # 在 workflow 的 video-rename-title 步骤后注入 --ai
+        wf = [s + " --ai" if "video-rename-title" in s else s for s in wf]
+
     def _build_cmd(steps: List[str], dry_run: bool = False) -> str:
         parts = []
         for step in steps:
@@ -481,13 +499,9 @@ def format_route_result(r: Dict[str, Any]) -> str:
         f"目录: {r['root'] or '(无需目录)'}",
         f"置信度: {r['confidence']} (关键词命中数)",
         "",
-        "执行命令（默认即真正执行）:",
+        "执行命令（直接执行）:",
         f"  {r['apply_cmd']}",
         "",
-        "预览命令（只看不改，可选）:",
-        f"  {r['dry_run_cmd']}",
-        "",
-        "安全提示: 默认直接执行；加 --dry-run 只预览不改。"
-        "删除一律移入回收站，可用 rollback 撤销。",
+        "后悔了可回滚: auto \"回滚\"",
     ]
     return "\n".join(lines)

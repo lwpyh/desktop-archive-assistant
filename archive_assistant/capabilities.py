@@ -507,6 +507,150 @@ def capability_move(
     return results
 
 
+def capability_move_path(
+    src: str,
+    dst_dir: str,
+    dry_run: bool = False,
+    log_dir: str = "~/.archive_assistant/log",
+    merge: bool = False,
+) -> Dict[str, Any]:
+    """移动单个文件或文件夹到目标目录（走执行器日志，可回滚）。
+
+    与 capability_move 的区别：
+    - capability_move：按通配符批量匹配（需要 root + match pattern）
+    - capability_move_path：按完整路径移动单个文件/文件夹（用户明确指定源）
+
+    冲突策略：
+    - 默认（merge=False）：目标已存在同名 → 加 -1/-2 后缀创建新副本（绝不覆盖）
+    - merge=True（仅文件夹）：目标已存在同名文件夹 → 把源文件夹内容合并进去
+      （文件冲突仍加后缀，绝不覆盖；合并后源文件夹会被清空删除）
+
+    返回 {src, dst, type, moved, log_path, merged, moves}
+    """
+    src = expand(src)
+    dst_dir = expand(dst_dir)
+
+    if not os.path.exists(src):
+        return {"error": f"源路径不存在: {src}"}
+
+    is_dir = os.path.isdir(src)
+    name = os.path.basename(src.rstrip("/"))
+    dst = os.path.join(dst_dir, name)
+
+    result: Dict[str, Any] = {
+        "src": src,
+        "dst": dst,
+        "type": "dir" if is_dir else "file",
+        "moved": False,
+        "merged": False,
+        "moves": [],
+        "log_path": None,
+    }
+
+    # 冲突处理
+    dst_exists = os.path.exists(dst)
+    do_merge = False
+
+    if dst_exists:
+        if merge and is_dir and os.path.isdir(dst):
+            # 文件夹合并模式：目标已存在同名文件夹 → 合并内容
+            do_merge = True
+        else:
+            # 默认策略：加后缀避让（绝不覆盖）
+            i = 1
+            while True:
+                cand = f"{dst}-{i}"
+                if not os.path.exists(cand):
+                    dst = cand
+                    break
+                i += 1
+            result["dst"] = dst
+
+    if dry_run:
+        if do_merge:
+            logger.info("[move-path] would merge %s into %s", src, dst)
+        else:
+            logger.info("[move-path] would move %s → %s", src, dst)
+        return result
+
+    # 真正移动
+    os.makedirs(dst_dir, exist_ok=True)
+
+    # 收集所有 move 记录（用于日志，支持回滚）
+    all_moves: List[Dict[str, str]] = []
+
+    def _resolve_collision(path: str) -> str:
+        if not os.path.exists(path):
+            return path
+        base, ext = os.path.splitext(path)
+        i = 1
+        while True:
+            cand = f"{base}-{i}{ext}"
+            if not os.path.exists(cand):
+                return cand
+            i += 1
+
+    def _merge_tree(src_root: str, dst_root: str):
+        """递归合并 src_root 内容到 dst_root（文件冲突加后缀）。"""
+        for entry in os.listdir(src_root):
+            s = os.path.join(src_root, entry)
+            d = os.path.join(dst_root, entry)
+            if os.path.isdir(s):
+                os.makedirs(d, exist_ok=True)
+                _merge_tree(s, d)
+                # 合并后清空源子目录
+                try:
+                    os.rmdir(s)
+                except OSError:
+                    pass
+            else:
+                final_d = _resolve_collision(d)
+                shutil.move(s, final_d)
+                all_moves.append({"src": s, "dst": final_d})
+
+    if do_merge:
+        # 文件夹合并模式
+        _merge_tree(src, dst)
+        # 删除已清空的源文件夹壳
+        try:
+            os.rmdir(src)
+        except OSError:
+            pass
+        result["merged"] = True
+        result["moved"] = True
+    else:
+        # 普通移动（单文件或加后缀的文件夹）
+        shutil.move(src, dst)
+        all_moves.append({"src": src, "dst": dst})
+        result["moved"] = True
+
+    # 写日志（与 executor 格式一致，rollback 可识别）
+    import json as _json
+    import time as _time
+    ts = _time.strftime("%Y%m%d_%H%M%S")
+    log_dir = expand(log_dir)
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"{ts}.json")
+    log = {
+        "ts": ts,
+        "root": os.path.dirname(src),
+        "mode": "move_path_merge" if do_merge else "move_path",
+        "trash_root": None,
+        "moves": all_moves,
+        "mkdirs": [dst_dir],
+    }
+    with open(log_path, "w", encoding="utf-8") as f:
+        _json.dump(log, f, ensure_ascii=False, indent=2)
+    result["log_path"] = log_path
+    result["moves"] = all_moves
+    if do_merge:
+        logger.info("[move-path] merged %s into %s (%d files), log=%s",
+                    src, dst, len(all_moves), log_path)
+    else:
+        logger.info("[move-path] moved %s → %s, log=%s", src, dst, log_path)
+    return result
+
+
 # ============================================================
 # 能力 10：clean — 清理
 # ============================================================
