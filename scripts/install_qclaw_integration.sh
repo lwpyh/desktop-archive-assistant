@@ -142,8 +142,17 @@ else
         # 用临时文件写 Modelfile，避免 -f - 的兼容性问题
         MODFILE=$(mktemp /tmp/ornith_modelfile.XXXXXX)
         echo "FROM $ORNITH_Q8" > "$MODFILE"
+        # 显式指定简单 TEMPLATE，覆盖 GGUF 里的复杂模板
+        # Qwen3.5 的默认 template 有 multi_step_tool 检查，会在多轮工具调用时报错
+        # "No user query found in messages"
+        echo 'TEMPLATE """{{ if .System }}<|im_start|>system' >> "$MODFILE"
+        echo '{{ .System }}<|im_end|>' >> "$MODFILE"
+        echo '{{ end }}{{ if .Prompt }}<|im_start|>user' >> "$MODFILE"
+        echo '{{ .Prompt }}<|im_end|>' >> "$MODFILE"
+        echo '{{ end }}<|im_start|>assistant' >> "$MODFILE"
+        echo '{{ .Response }}<|im_end|>"""' >> "$MODFILE"
         if ollama create ornith-9b:latest -f "$MODFILE"; then
-          echo "  ✅ ornith-9b:latest 已创建（Q8_0，9.5GB）"
+          echo "  ✅ ornith-9b:latest 已创建（Q8_0，9.5GB，简单模板）"
         else
           echo "  ❌ ornith-9b:latest 创建失败，请手动运行:"
           echo "     echo 'FROM $ORNITH_Q8' > /tmp/Modelfile"
@@ -216,11 +225,20 @@ else
         MODFILE=$(mktemp /tmp/ornith_vision_modelfile.XXXXXX)
         echo "FROM $ORNITH_Q8" > "$MODFILE"
         echo "ADAPTER $MMPROJ_FILE" >> "$MODFILE"
+        # 显式指定简单 TEMPLATE，覆盖 GGUF 里的复杂模板
+        # Qwen3.5 的默认 template 有 multi_step_tool 检查，会在多轮工具调用时报错
+        # "No user query found in messages"
+        echo 'TEMPLATE """{{ if .System }}<|im_start|>system' >> "$MODFILE"
+        echo '{{ .System }}<|im_end|>' >> "$MODFILE"
+        echo '{{ end }}{{ if .Prompt }}<|im_start|>user' >> "$MODFILE"
+        echo '{{ .Prompt }}<|im_end|>' >> "$MODFILE"
+        echo '{{ end }}<|im_start|>assistant' >> "$MODFILE"
+        echo '{{ .Response }}<|im_end|>"""' >> "$MODFILE"
         echo 'PARAMETER temperature 0.6' >> "$MODFILE"
         echo 'PARAMETER top_p 0.95' >> "$MODFILE"
         echo 'PARAMETER top_k 20' >> "$MODFILE"
         if ollama create ornith-vision -f "$MODFILE"; then
-          echo "  ✅ ornith-vision 已创建（Q8_0 + mmproj，~10.4GB）"
+          echo "  ✅ ornith-vision 已创建（Q8_0 + mmproj，~10.4GB，简单模板）"
         else
           echo "  ❌ ornith-vision 创建失败"
           echo "     手动创建:"
