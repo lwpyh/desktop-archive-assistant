@@ -197,8 +197,9 @@ else
       fi
 
       # 检查 ornith-vision 是否存在且带 vision 能力
+      # 注意：ollama list 显示为 "ornith-vision:latest"，用前缀匹配
       NEED_VISION_RECREATE=0
-      if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-vision"; then
+      if ollama list 2>/dev/null | awk '{print $1}' | grep -q "^ornith-vision"; then
         if ollama show ornith-vision 2>/dev/null | grep -qi "vision"; then
           echo "  ✅ ornith-vision 已存在（带 vision 能力），跳过"
         else
