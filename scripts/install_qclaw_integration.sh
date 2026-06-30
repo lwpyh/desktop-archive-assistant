@@ -140,9 +140,17 @@ else
 
       # 创建/重建 ornith-9b:latest（从 Q8_0 基础权重）
       if [ "$NEED_RECREATE" -eq 1 ] && ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$ORNITH_Q8"; then
-        printf 'FROM %s\n' "$ORNITH_Q8" | ollama create ornith-9b:latest -f - 2>/dev/null && \
-          echo "  ✅ ornith-9b:latest 已创建（Q8_0，9.5GB）" || \
-          echo "  ❌ ornith-9b:latest 创建失败，请手动: printf 'FROM $ORNITH_Q8\\n' | ollama create ornith-9b:latest -f -"
+        # 用临时文件写 Modelfile，避免 -f - 的兼容性问题
+        MODFILE=$(mktemp /tmp/ornith_modelfile.XXXXXX)
+        echo "FROM $ORNITH_Q8" > "$MODFILE"
+        if ollama create ornith-9b:latest -f "$MODFILE"; then
+          echo "  ✅ ornith-9b:latest 已创建（Q8_0，9.5GB）"
+        else
+          echo "  ❌ ornith-9b:latest 创建失败，请手动运行:"
+          echo "     echo 'FROM $ORNITH_Q8' > /tmp/Modelfile"
+          echo "     ollama create ornith-9b:latest -f /tmp/Modelfile"
+        fi
+        rm -f "$MODFILE"
       fi
 
       # ornith-vision: 9B + mmproj 视觉投影器（Q5_K_M，7.4GB，VLM 视觉用）
