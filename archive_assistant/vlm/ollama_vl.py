@@ -112,6 +112,46 @@ class OllamaVLM:
             obj = json.loads(resp.read().decode("utf-8"))
         return [str(m.get("name", "")) for m in obj.get("models", [])]
 
+    @staticmethod
+    def _norm_name(name: str) -> str:
+        """归一化模型名用于匹配：去掉 :tag，再去掉结尾的 -latest（大小写不敏感）。
+
+        目的：让 config 里的 `ornith-vision` 能匹配 ollama 实际的
+        `ornith-vision-latest:latest` / `ornith-vision:latest` 等命名变体
+        （不同机器 ollama create/pull 出来的 tag 名可能不一致）。
+        """
+        n = (name or "").split(":", 1)[0].strip()
+        n = re.sub(r"-latest$", "", n, flags=re.IGNORECASE)
+        return n.lower()
+
+    def _resolve_model(self, models: List[str]) -> Optional[str]:
+        """在 ollama 可用模型列表里解析出与配置模型对应的“真实名”。
+
+        返回可直接用于 /api/chat 的实际模型名；找不到返回 None。
+        匹配优先级：精确 > 补 :latest > 归一化(忽略tag与-latest) > 唯一前缀。
+        """
+        if not models:
+            return None
+        # 1) 精确匹配
+        if self._model in models:
+            return self._model
+        # 2) 配置没带 tag 时，补 :latest 再精确匹配
+        if ":" not in self._model and f"{self._model}:latest" in models:
+            return f"{self._model}:latest"
+        # 3) 归一化匹配：忽略 :tag 与结尾 -latest（覆盖 ornith-vision → ornith-vision-latest:latest）
+        target = self._norm_name(self._model)
+        for m in models:
+            if self._norm_name(m) == target:
+                return m
+        # 4) 保守的唯一前缀匹配（仅当只命中一个，避免误配）
+        hits = [
+            m for m in models
+            if self._norm_name(m).startswith(target) or target.startswith(self._norm_name(m))
+        ]
+        if len(hits) == 1:
+            return hits[0]
+        return None
+
     def _load(self) -> None:
         """检查 ollama 可达且目标模型已存在。失败抛 RuntimeError。"""
         if self._ready:
@@ -126,15 +166,19 @@ class OllamaVLM:
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"查询 ollama 模型列表失败: {e}")
 
-        base = self._model.split(":", 1)[0]
-        exists = self._model in models or any(
-            m.split(":", 1)[0] == base for m in models
-        )
-        if not exists:
+        resolved = self._resolve_model(models)
+        if not resolved:
             raise RuntimeError(
                 f"ollama 中未找到模型 {self._model}（可用: {', '.join(models) or '无'}）。"
                 f"请运行: ollama pull {self._model}"
             )
+        # 回填真实模型名，供后续 /api/chat 请求使用（config 写 ornith-vision，
+        # 实际可能是 ornith-vision-latest:latest —— 必须用真实名请求才不会 404）
+        if resolved != self._model:
+            logger.info(
+                "ollama 模型名解析：配置=%s → 实际使用=%s", self._model, resolved
+            )
+            self._model = resolved
         self._ready = True
         logger.info("OllamaVLM 就绪: host=%s model=%s", self._host, self._model)
 
