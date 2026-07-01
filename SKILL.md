@@ -1,33 +1,17 @@
 ---
 name: desktop-archive-assistant
 description: |
-  【桌面/文件整理·一条命令搞定】用户要整理桌面/文件/照片/视频时，别自己写 mv/cp/mkdir/find（又长又容易错），
-  直接用本 skill 的子命令替代 10 行 shell。每个子命令内部自动调 VLM 看图归类、安全移动（进回收站可回滚），
-  比你手写 shell 准得多、省事得多。
-  
-  ⚠️【最高优先·会话启动协议】收到任何整理/归档/分类/改名/照片/视频相关请求时，
-  第一个动作必须是用 read_file 读取本 SKILL.md 的完整内容（路径见下方 location），
-  读完之前不回复任何方案、不调用任何工具、不自跑 shell。
+  ⚠️【铁律·启动协议】收到整理/归档/分类/改名/照片/视频/文件请求时，
+  第一个动作必须用 read_file 读本 skill 的 SKILL.md 完整内容（location见下方），
+  读完之前不回复方案、不调工具、不跑shell、不编结果。
   
   基础格式：python3 -m archive_assistant.cli.main <子命令> <目录> [参数]
-  
-  常用子命令：
-    organize ~/Desktop                    # 整理桌面（全流程：扫描→归类→执行→排列图标）
-    archive-by-date ~/Photos              # 照片按拍摄日期归档
-    dedupe ~/Photos --method phash        # 照片去重
-    classify ~/Photos                      # 自动按内容归类（VLM 自动生成类别）
-    classify-into ~/Photos --categories "风景,人物,美食"  # 指定类别归类（不匹配的进"其他"文件夹）
-    video-rename-title --ai ~/Videos       # 视频按内容改名（VLM 抽帧看画面起名）
-    extract ~/Photos --mode ocr --vlm-ocr  # 图片 OCR 识字
-    rollback --last                        # 撤销上次操作
-    sort ~/Desktop                         # 排列桌面图标
-  
-  执行后把输出原样转述给用户即可，不要自己编"已整理完成"。
-  注意：禁止自己用 mv/cp/mkdir/find 整理——用子命令才正确、才安全、才省事。
-description_zh: "桌面整理专家：直接选子命令整理桌面/照片/视频，禁止自己跑 shell 整理"
-description_en: "Desktop organizer: pick subcommands directly to organize files/photos/videos, never shell out manually"
+  常用子命令：organize / classify / classify-into / dedupe / video-rename-title --ai / extract --mode ocr --vlm-ocr / rollback --last / sort
+  核心规则：禁止自己用 mv/cp/mkdir/find 整理，一律走子命令。执行后原样转述输出给用户。
+description_zh: "桌面整理专家：先读SKILL.md再执行，用子命令整理禁止手写shell"
+description_en: "Desktop organizer: MUST read_file SKILL.md first, then use subcommands (never manual shell)"
 location: plugin
-version: 0.7.0
+version: 0.8.0
 metadata:
   openclaw:
     always: true
@@ -40,18 +24,16 @@ entrypoints:
 
 # Desktop Archive Assistant — 桌面文件整理助手
 
-## 🚨 会话启动协议（最高优先，先于一切任务）
+## 🚨 会话启动铁律（最高优先，违反 = 无效）
 
-收到用户的**任何**整理/归档/分类/改名/去重/照片/视频/表格/文档相关请求时，**第一个动作必须是 `read_file` 读取本 SKILL.md 的完整内容**。
+**收到任何整理/归档/分类/改名/去重/照片/视频/表格/文档相关请求时，第一个动作必须是 `read_file` 读取本 SKILL.md 完整内容。**
 
-**为什么：** 你现在看到的只是 frontmatter 注入的摘要。完整 SKILL.md 里有命令速查表、安全原则、强制流程等关键信息，必须完整读取后才能正确执行。
+**为什么：** 你现在看到的只是 frontmatter 注入的摘要（常用命令列表）。完整 SKILL.md 里有意图速查表（38条命令）、强制流程、安全原则、OCR vs caption 区分等关键信息。
 
 **执行规则：**
 1. 收到整理相关请求 → 先 `read_file` 读 SKILL.md
-2. 读完之前：不回复任何方案、不调用任何工具、不自跑 shell
+2. 读完之前：不回复方案、不调工具、不跑shell、不编结果
 3. 读完之后：按 SKILL.md 的"强制流程"执行
-
-> 即便上下文已注入摘要，仍须主动 `read_file` 一次完整版。
 
 ## ⚠️ SYSTEM RULES — 强制执行
 
