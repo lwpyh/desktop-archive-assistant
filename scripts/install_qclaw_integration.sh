@@ -120,15 +120,27 @@ else
         echo "  ✅ $ORNITH_Q8 已存在"
       fi
 
-      # 检查 ornith-9b:latest 是否存在且是 Q8_0 量化
+      # 检查 ornith-9b:latest 是否存在、是 Q8_0 量化、且用简单模板
+      # ⚠️ 关键：不能只查量化！GGUF 自带的复杂模板含 multi_step_tool，
+      # 在多轮工具调用时会报 400 "No user query found in messages"。
+      # 旧脚本只查量化就跳过，导致坏模板永远留着修不好——这里必须同时查模板。
       NEED_RECREATE=0
       if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-9b:latest"; then
         # 检查现有 ornith-9b:latest 的量化版本
         EXISTING_QUANT=$(ollama show ornith-9b:latest 2>/dev/null | grep -i "quantization" | awk '{print $2}' || true)
-        if [ "$EXISTING_QUANT" = "Q8_0" ]; then
-          echo "  ✅ ornith-9b:latest 已是 Q8_0 量化（$EXISTING_QUANT），跳过"
+        # 检查模板是否是坏模板（含 multi_step_tool = GGUF 自带复杂模板）
+        BAD_TEMPLATE=0
+        if ollama show ornith-9b:latest --template 2>/dev/null | grep -q "multi_step_tool"; then
+          BAD_TEMPLATE=1
+        fi
+        if [ "$EXISTING_QUANT" = "Q8_0" ] && [ "$BAD_TEMPLATE" -eq 0 ]; then
+          echo "  ✅ ornith-9b:latest 已是 Q8_0 量化 + 简单模板，跳过"
         else
-          echo "  ⚠️  ornith-9b:latest 量化版本为 $EXISTING_QUANT（非 Q8_0），将覆盖重建"
+          if [ "$BAD_TEMPLATE" -eq 1 ]; then
+            echo "  ⚠️  ornith-9b:latest 用了复杂模板（含 multi_step_tool，会报 400），将覆盖重建"
+          else
+            echo "  ⚠️  ornith-9b:latest 量化版本为 $EXISTING_QUANT（非 Q8_0），将覆盖重建"
+          fi
           # 先删除旧版本
           ollama rm ornith-9b:latest 2>/dev/null || true
           NEED_RECREATE=1
@@ -209,10 +221,19 @@ else
       # 注意：ollama list 显示为 "ornith-vision:latest"，用前缀匹配
       NEED_VISION_RECREATE=0
       if ollama list 2>/dev/null | awk '{print $1}' | grep -q "^ornith-vision"; then
-        if ollama show ornith-vision 2>/dev/null | grep -qi "vision"; then
-          echo "  ✅ ornith-vision 已存在（带 vision 能力），跳过"
+        # 同时检查 vision 能力 + 模板（复杂模板含 multi_step_tool 会报 400）
+        VISION_BAD_TEMPLATE=0
+        if ollama show ornith-vision --template 2>/dev/null | grep -q "multi_step_tool"; then
+          VISION_BAD_TEMPLATE=1
+        fi
+        if ollama show ornith-vision 2>/dev/null | grep -qi "vision" && [ "$VISION_BAD_TEMPLATE" -eq 0 ]; then
+          echo "  ✅ ornith-vision 已存在（带 vision 能力 + 简单模板），跳过"
         else
-          echo "  ⚠️  ornith-vision 不带 vision 能力，将覆盖重建"
+          if [ "$VISION_BAD_TEMPLATE" -eq 1 ]; then
+            echo "  ⚠️  ornith-vision 用了复杂模板（含 multi_step_tool，会报 400），将覆盖重建"
+          else
+            echo "  ⚠️  ornith-vision 不带 vision 能力，将覆盖重建"
+          fi
           ollama rm ornith-vision 2>/dev/null || true
           NEED_VISION_RECREATE=1
         fi
