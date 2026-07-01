@@ -5,7 +5,7 @@ description: |
   第一个动作必须用 read_file 读本 skill 的 SKILL.md 完整内容（location见下方），
   读完之前不回复方案、不调工具、不跑shell、不编结果。
   
-  基础格式：python3 -m archive_assistant.cli.main <子命令> <目录> [参数]
+  基础格式：archive-cli <子命令> <目录> [参数]   （路径无关入口，无需 cd、无需知道仓库路径）
   常用子命令：organize / classify / classify-into / dedupe / video-rename-title --ai / extract --mode ocr --vlm-ocr / rollback --last / sort
   核心规则：禁止自己用 mv/cp/mkdir/find 整理，一律走子命令。执行后原样转述输出给用户。
 description_zh: "桌面整理专家：先读SKILL.md再执行，用子命令整理禁止手写shell"
@@ -17,9 +17,10 @@ metadata:
     always: true
     emoji: "🗂️"
 entrypoints:
-  - scripts/archive             # bash wrapper (macOS/Linux)
+  - archive-cli                 # 路径无关透传入口（推荐）：archive-cli <子命令> <目录> [参数]
+  - scripts/archive             # bash wrapper（意图串入口，走 auto 路由）
   - scripts/archive.cmd         # Windows wrapper
-  - archive_assistant.cli.main  # python -m archive_assistant.cli.main
+  - archive_assistant.cli.main  # python -m archive_assistant.cli.main（回退，需在仓库目录内）
 ---
 
 # Desktop Archive Assistant — 桌面文件整理助手
@@ -40,10 +41,17 @@ entrypoints:
 **你直接选子命令执行，不要手写 shell。** 任何涉及"整理/归档/分类/照片/视频"的任务，
 **绝对禁止自己用 exec 跑 mv/cp/mkdir/find**——用下方的子命令，内部自动调 VLM 看图归类、安全移动（可回滚）。
 
-**基础格式：**
+**基础格式（路径无关，跨机器通用）：**
 ```bash
-cd /Users/jian/desktop-archive-assistant && python3 -m archive_assistant.cli.main <子命令> <目录> [参数]
+archive-cli <子命令> <目录> [参数]
 ```
+
+> 🚀 **一律用 `archive-cli` 前缀，不要写绝对路径、不要 `cd`、不要自己拼 `python3 -m`。**
+> `archive-cli` 是安装时装到 `~/.local/bin/archive-cli` 的透传入口，会自动 cd 到本机仓库目录再执行——
+> **不同机器仓库路径不同（如 `/Users/jian/...` 或 `/Users/ec2-user/...`），你无需关心也不要猜测。**
+> 下方所有示例里出现的 `python3 -m archive_assistant.cli.main <...>` 都等价于 `archive-cli <...>`，**直接用 `archive-cli` 版本即可，别去探路径**。
+>
+> 回退（仅当 `archive-cli: command not found` 时）：先 `command -v archive-cli`，若确实没有再考虑在仓库目录内 `python3 -m archive_assistant.cli.main`（但正常安装后不该走到这一步）。
 
 **强制流程：**
 0. 【环境已就绪·禁止安装】处理任何整理请求时，**一律假定依赖已装好**，**禁止**执行 `pip install`、`ollama pull`、任何"检查环境/安装依赖/部署"步骤，也**禁止**先读 `requirements.txt`。直接进入第 1 步。安装是一次性人工部署的事，**绝不是处理用户请求的一部分**。

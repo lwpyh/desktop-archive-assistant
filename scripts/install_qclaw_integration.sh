@@ -4,7 +4,9 @@
 # 在目标机器上跑一次，自动完成：
 #   0. 检查并拉取 ollama 模型（ornith-9b Q8_0 9.5GB + ornith-vision + qwen3.5:4b）
 #   1. 装 Python 依赖（pip install -r requirements.txt）
-#   2. 装 archive 命令到 ~/.local/bin（自动改 SKILL_DIR 路径 + 加到 PATH）
+#   2. 装 archive + archive-cli 命令到 ~/.local/bin（自动填本机 SKILL_DIR 路径 + 加到 PATH）
+#      - archive     : 意图串入口（走 auto 路由，一句话整理）
+#      - archive-cli : 子命令透传入口（路径无关，助手精确控制子命令+flag，跨机器通用）
 #   3. 同步 SKILL.md → ~/.qclaw/skills/desktop-archive-assistant/
 #   4. 创建 agent 目录 + models.json（检测 ollama 模型自动生成）
 #   5. 创建 workspace + 规则文件（SOUL.md/AGENTS.md/IDENTITY.md 等，路径自动替换）
@@ -343,6 +345,23 @@ EOF
 chmod +x "$ARCHIVE_BIN"
 echo "  ✅ archive → $ARCHIVE_BIN"
 
+# 生成 archive-cli 透传 wrapper（路径无关：自动 cd 到本机 SKILL_DIR，把所有参数原样转发给模块）
+# 目的：让 qclaw 助手用 `archive-cli <子命令> <目录> [flag]` 精确控制，
+#       无需知道仓库路径、无需 cd、无需摸 python -m 的调用方式（跨机器通用）。
+ARCHIVE_CLI_BIN="$LOCAL_BIN/archive-cli"
+cat > "$ARCHIVE_CLI_BIN" <<EOF
+#!/usr/bin/env bash
+# archive-cli — 桌面整理 CLI 透传入口（由 install_qclaw_integration.sh 生成）
+# 用法: archive-cli <子命令> <目录> [参数...]，等价于在仓库目录里跑
+#        python3 -m archive_assistant.cli.main <子命令> <目录> [参数...]
+set -e
+SKILL_DIR="$SKILL_DIR"
+cd "\$SKILL_DIR"
+exec python3 -m archive_assistant.cli.main "\$@"
+EOF
+chmod +x "$ARCHIVE_CLI_BIN"
+echo "  ✅ archive-cli → $ARCHIVE_CLI_BIN"
+
 # 确保 ~/.local/bin 在 PATH
 SHELL_RC=""
 if [ -n "${ZSH_VERSION:-}" ] || [ "$SHELL" = "/bin/zsh" ] || [ "$SHELL" = "/usr/bin/zsh" ]; then
@@ -365,11 +384,11 @@ fi
 # 当前 session 也加一下
 export PATH="$LOCAL_BIN:$PATH"
 
-# 测试 archive 命令
-if command -v archive >/dev/null 2>&1; then
-  echo "  ✅ archive 命令可用"
+# 测试 archive / archive-cli 命令
+if command -v archive >/dev/null 2>&1 && command -v archive-cli >/dev/null 2>&1; then
+  echo "  ✅ archive / archive-cli 命令可用"
 else
-  echo "  ⚠️  archive 未在 PATH 中，请开新终端或执行: export PATH=\"$LOCAL_BIN:\$PATH\""
+  echo "  ⚠️  archive/archive-cli 未在 PATH 中，请开新终端或执行: export PATH=\"$LOCAL_BIN:\$PATH\""
 fi
 
 # ---------- 3. 同步 SKILL.md ----------
@@ -624,6 +643,13 @@ if [ -x "$ARCHIVE_BIN" ]; then
   pass "archive 命令已安装: $ARCHIVE_BIN"
 else
   fail "archive 命令缺失 → 重跑本脚本（第 2 步会生成 $ARCHIVE_BIN）"
+fi
+
+# 3b) archive-cli 透传命令已安装（路径无关入口，SKILL.md 里的命令都靠它）
+if [ -x "$ARCHIVE_CLI_BIN" ]; then
+  pass "archive-cli 透传命令已安装: $ARCHIVE_CLI_BIN"
+else
+  fail "archive-cli 缺失 → 重跑本脚本（第 2 步会生成 $ARCHIVE_CLI_BIN）"
 fi
 
 # 4) 端到端：archive CLI 真能起来（列出意图，只读、不动文件）
