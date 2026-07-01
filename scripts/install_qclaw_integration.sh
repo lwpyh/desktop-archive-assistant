@@ -9,6 +9,8 @@
 #   4. 创建 agent 目录 + models.json（检测 ollama 模型自动生成）
 #   5. 创建 workspace + 规则文件（SOUL.md/AGENTS.md/IDENTITY.md 等，路径自动替换）
 #   6. 安全 merge openclaw.json（添加 desktop-archiver agent + 启用 skill）
+#   7. 安装自检（verify）：逐项检查 依赖/代码/archive命令/SKILL.md/agent/skill/模型，
+#      任何一项失败都明确打印「是哪一步 + 怎么修」，并以非零退出码结束
 #
 # 用法（在 desktop-archive-assistant 目录下）：
 #   bash scripts/install_qclaw_integration.sh                 # 默认检测
@@ -594,16 +596,124 @@ else
   echo "  ⏭️  --skip-config，跳过"
 fi
 
+# ---------- 7. 安装自检（verify） ----------
+echo ""
+echo "[7/7] 安装自检（verify）—— 逐项检查是否真的装好"
+FAIL=0
+WARN=0
+pass(){ echo "  ✅ $1"; }
+fail(){ echo "  ❌ $1"; FAIL=$((FAIL+1)); }
+warn(){ echo "  ⚠️  $1"; WARN=$((WARN+1)); }
+
+# 1) Python 核心依赖可导入
+if python3 -c "import yaml, PIL, numpy, tqdm" 2>/dev/null; then
+  pass "Python 核心依赖 (PyYAML/Pillow/numpy/tqdm) 已就绪"
+else
+  fail "Python 核心依赖缺失 → 修复: cd $SKILL_DIR && python3 -m pip install -r requirements.txt（或重跑本脚本 --force）"
+fi
+
+# 2) archive_assistant 包可导入（代码是否真的在位）
+if ( cd "$SKILL_DIR" && python3 -c "import archive_assistant" ) 2>/dev/null; then
+  pass "archive_assistant 包可导入（代码就位）"
+else
+  fail "archive_assistant 包无法导入 → 确认仓库完整: cd $SKILL_DIR && git pull"
+fi
+
+# 3) archive 命令已安装
+if [ -x "$ARCHIVE_BIN" ]; then
+  pass "archive 命令已安装: $ARCHIVE_BIN"
+else
+  fail "archive 命令缺失 → 重跑本脚本（第 2 步会生成 $ARCHIVE_BIN）"
+fi
+
+# 4) 端到端：archive CLI 真能起来（列出意图，只读、不动文件）
+if ( cd "$SKILL_DIR" && python3 -m archive_assistant.cli.main auto --list-intents ) >/dev/null 2>&1; then
+  pass "archive CLI 端到端可运行（archive list 通过）"
+else
+  fail "archive CLI 无法运行 → 手动排查: cd $SKILL_DIR && python3 -m archive_assistant.cli.main auto --list-intents"
+fi
+
+# 5) SKILL.md 已同步到 qclaw（agent prompt 来源）
+if [ -f "$SKILL_SYNC/SKILL.md" ]; then
+  pass "SKILL.md 已同步到 qclaw: $SKILL_SYNC/SKILL.md"
+else
+  fail "SKILL.md 未同步 → 重跑本脚本（第 3 步会 cp 到 $SKILL_SYNC）"
+fi
+
+# 6) models.json 存在且为合法 JSON
+if [ -f "$AGENT_DIR/models.json" ] && python3 -c "import json;json.load(open('$AGENT_DIR/models.json'))" 2>/dev/null; then
+  pass "models.json 存在且为合法 JSON"
+else
+  fail "models.json 缺失或损坏 → 重跑本脚本 --force（第 4 步重建）"
+fi
+
+# 7) workspace 规则文件已就位
+if [ -f "$WORKSPACE/SOUL.md" ]; then
+  pass "workspace 规则文件已就位: $WORKSPACE"
+else
+  fail "workspace 规则文件缺失 → 重跑本脚本 --force（第 5 步生成）"
+fi
+
+# 8) openclaw.json 里有 desktop-archiver agent 且 skill 已启用
+OPENCLAW="$QCLAW_HOME/openclaw.json"
+if [ -f "$OPENCLAW" ]; then
+  AGENT_CHECK=$(python3 -c "
+import json
+cfg=json.load(open('$OPENCLAW'))
+alist=cfg.get('agents',{}).get('list',[])
+has_agent=any(a.get('id')=='$AGENT_ID' for a in alist)
+skill=cfg.get('skills',{}).get('desktop-archive-assistant',{})
+has_skill=bool(skill.get('enabled'))
+print('OK' if (has_agent and has_skill) else ('NOAGENT' if not has_agent else 'NOSKILL'))
+" 2>/dev/null || echo "ERR")
+  case "$AGENT_CHECK" in
+    OK)      pass "openclaw.json 已含 desktop-archiver agent 且 skill 已启用" ;;
+    NOAGENT) fail "openclaw.json 缺 desktop-archiver agent → 先从 qclaw「专家广场」装任意一个专家(触发 agent 持久化)，再重跑本脚本（见脚本顶部⚠️说明）" ;;
+    NOSKILL) fail "openclaw.json 中 skill 未启用 → 重跑本脚本: --skip-pip --skip-models" ;;
+    *)       fail "openclaw.json 解析失败 → 检查文件是否损坏: $OPENCLAW" ;;
+  esac
+else
+  fail "openclaw.json 不存在 → 先启动一次 qclaw 生成配置，再重跑本脚本"
+fi
+
+# 9) ollama 服务 + 关键模型（WARN 级：缺了整理会降级为规则模式，仍可跑，不致命）
+if command -v ollama >/dev/null 2>&1 && ollama list >/dev/null 2>&1; then
+  pass "ollama 服务可达"
+  for m in "ornith-9b:latest" "qwen3.5:4b"; do
+    if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "$m"; then
+      pass "模型就绪: $m"
+    else
+      warn "模型缺失: $m（整理会降级为规则模式仍可跑；补装: ollama pull $m，或重跑本脚本）"
+    fi
+  done
+else
+  warn "ollama 服务不可达（整理将降级为规则模式；启动: ollama serve & 后 pull 模型，或重跑本脚本）"
+fi
+
 # ---------- 完成 ----------
 echo ""
 echo "=========================================="
-echo "  ✅ 安装完成！"
+if [ "$FAIL" -eq 0 ]; then
+  echo "  ✅ 安装完成，自检全部通过！"
+  if [ "$WARN" -gt 0 ]; then
+    echo "  （有 $WARN 项警告，见上；通常不影响基本整理，仅影响 VLM 智能识别）"
+  fi
+else
+  echo "  ❌ 安装未完全通过：$FAIL 项失败$( [ "$WARN" -gt 0 ] && echo "，$WARN 项警告" )"
+  echo "     请按上面每个 ❌ 后面的提示修复对应那一步，然后重跑本脚本。"
+fi
 echo "=========================================="
 echo ""
-echo "验证步骤："
+echo "验证步骤（自检已自动跑过一遍）："
 echo "  1. 确保 ollama 已启动:  ollama serve &"
 echo "  2. 测试 archive 命令:   archive list"
 echo "  3. 启动/重启 qclaw，选「桌面整理助手」agent"
 echo "  4. 说「整理桌面」测试"
 echo ""
+echo "远端一键重装（拉最新代码后一条命令搞定）："
+echo "  cd $SKILL_DIR && git pull && bash scripts/install_qclaw_integration.sh --force"
+echo ""
 echo "如需重装:  bash scripts/install_qclaw_integration.sh --force"
+
+# 自检有失败项则以非零退出码结束，便于「一条命令」链式调用感知失败
+[ "$FAIL" -eq 0 ] || exit 2

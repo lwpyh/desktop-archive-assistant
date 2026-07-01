@@ -2,7 +2,33 @@
 
 端侧"桌面文件整理助手"。详见 [SKILL.md](./SKILL.md)。
 
-## 快速开始
+## qclaw 一键安装（推荐）
+
+把本工具装好并集成到 qclaw（拉模型 → 装依赖 → 装 `archive` 命令 → 同步 `SKILL.md` → 建 agent → merge `openclaw.json`），最后**自动自检**并明确报告哪一步 OK / 哪一步失败：
+
+```bash
+# 全新机器：先 clone 仓库
+git clone https://github.com/lwpyh/desktop-archive-assistant.git
+cd desktop-archive-assistant
+bash scripts/install_qclaw_integration.sh
+
+# 已装过、只想拉最新代码重装：一条命令搞定
+cd desktop-archive-assistant && git pull && bash scripts/install_qclaw_integration.sh --force
+```
+
+> ⚠️ **全新机器首次部署**：请先从 qclaw「专家广场」安装任意一个其他专家（触发 qclaw 的 agent 持久化机制），**再**跑本脚本，否则 qclaw 启动会覆盖 `openclaw.json` 导致 `desktop-archiver` agent 消失。
+
+安装脚本最后一步 `[7/7] 安装自检` 会逐项检查并打印结果：
+
+- ✅/❌ Python 核心依赖、`archive_assistant` 包可导入、`archive` 命令、`archive` CLI 端到端可运行
+- ✅/❌ `SKILL.md` 已同步到 `~/.qclaw/skills/`、`models.json` 合法、workspace 规则文件、`openclaw.json` 里 agent + skill
+- ⚠️ ollama 服务与关键模型（缺失只告警，整理会降级为规则模式仍可跑）
+
+任何 ❌ 都会附带「怎么修」的提示，且脚本以**非零退出码**结束，便于链式命令感知失败。
+
+常用参数：`--force`（覆盖重装）、`--skip-pip`、`--skip-models`、`--skip-config`。
+
+## 快速开始（纯 CLI，不经 qclaw）
 
 ```bash
 # 1. 安装依赖（CPU 即可跑，OCR 全本地）
