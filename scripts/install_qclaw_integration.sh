@@ -128,9 +128,12 @@ else
       if ollama list 2>/dev/null | awk '{print $1}' | grep -qFx "ornith-9b:latest"; then
         # 检查现有 ornith-9b:latest 的量化版本
         EXISTING_QUANT=$(ollama show ornith-9b:latest 2>/dev/null | grep -i "quantization" | awk '{print $2}' || true)
-        # 检查模板是否是坏模板（含 multi_step_tool = GGUF 自带复杂模板）
+        # 检查真正生效的模板（--modelfile 的 TEMPLATE 段，而非 --template）
+        # ⚠️ 注意：ollama show --template 显示的是 GGUF 内嵌 chat_template，
+        # 它永远含 multi_step_tool（本地能工作的机器也一样），不能用来判断！
+        # 真正生效的是 Modelfile 里的 TEMPLATE，用 --modelfile 才看得到。
         BAD_TEMPLATE=0
-        if ollama show ornith-9b:latest --template 2>/dev/null | grep -q "multi_step_tool"; then
+        if ollama show ornith-9b:latest --modelfile 2>/dev/null | grep -q "multi_step_tool"; then
           BAD_TEMPLATE=1
         fi
         if [ "$EXISTING_QUANT" = "Q8_0" ] && [ "$BAD_TEMPLATE" -eq 0 ]; then
@@ -222,8 +225,9 @@ else
       NEED_VISION_RECREATE=0
       if ollama list 2>/dev/null | awk '{print $1}' | grep -q "^ornith-vision"; then
         # 同时检查 vision 能力 + 模板（复杂模板含 multi_step_tool 会报 400）
+        # 同 ornith-9b：用 --modelfile 查真正生效的模板，不用 --template（GGUF内嵌，永远命中）
         VISION_BAD_TEMPLATE=0
-        if ollama show ornith-vision --template 2>/dev/null | grep -q "multi_step_tool"; then
+        if ollama show ornith-vision --modelfile 2>/dev/null | grep -q "multi_step_tool"; then
           VISION_BAD_TEMPLATE=1
         fi
         if ollama show ornith-vision 2>/dev/null | grep -qi "vision" && [ "$VISION_BAD_TEMPLATE" -eq 0 ]; then
