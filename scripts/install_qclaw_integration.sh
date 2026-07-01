@@ -391,9 +391,11 @@ generate_models_json() {
     local model_list
     model_list=$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | grep -v '^$' || true)
     if [ -n "$model_list" ]; then
-      echo "  检测到 ollama 模型："
-      echo "$model_list" | sed 's/^/    - /'
-      echo ""
+      # ⚠️ 这些是日志，必须走 stderr(>&2)！函数 stdout 会被重定向进 models.json，
+      # 若走 stdout 会把日志文本混入 JSON 顶部导致文件损坏(曾踩坑:193字节垃圾前缀)。
+      echo "  检测到 ollama 模型：" >&2
+      echo "$model_list" | sed 's/^/    - /' >&2
+      echo "" >&2
 
       # 用 python 生成 models.json
       models_json=$(OLLAMA_HOST="$ollama_host" MODEL_LIST="$model_list" python3 -c "
@@ -403,12 +405,14 @@ model_entries = []
 for m in models:
     has_vision = any(k in m.lower() for k in ['qwen3.5', 'qwen3.6', 'ornith-vision', 'qwen2.5vl', 'qwen2.5-vl', 'vl'])
     has_think = 'nothink' not in m.lower() and any(k in m.lower() for k in ['qwen3.5', 'qwen3.6', 'ornith'])
+    # ornith 系列上下文窗设 32768（与本地一致，避免长会话截断丢失 SKILL.md 铁律），其余 16000
+    ctx = 32768 if 'ornith' in m.lower() else 16000
     entry = {
         'id': m,
         'name': m,
         'reasoning': has_think,
         'input': ['text', 'image'] if has_vision else ['text'],
-        'contextWindow': 16000,
+        'contextWindow': ctx,
         'cost': {'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0},
         'maxTokens': 8192,
         'api': 'ollama'
@@ -445,7 +449,7 @@ print(json.dumps(result, indent=2, ensure_ascii=False))
   fi
 
   if [ -z "$models_json" ]; then
-    echo "  ⚠️  未检测到 ollama 或无可用模型，使用默认配置（qwen3.5:4b）"
+    echo "  ⚠️  未检测到 ollama 或无可用模型，使用默认配置（qwen3.5:4b）" >&2
     models_json=$(cat <<'JSON'
 {
   "providers": {
