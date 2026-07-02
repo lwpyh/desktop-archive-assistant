@@ -2,41 +2,52 @@
 # install_qclaw_integration.sh — 一键把 desktop-archive-assistant 装好并集成到 qclaw
 #
 # 在目标机器上跑一次，自动完成：
-#   0. 检查并拉取 ollama 模型（ornith-9b Q8_0 9.5GB + ornith-vision + qwen3.5:4b）
-#   1. 装 Python 依赖（pip install -r requirements.txt）
-#   2. 装 archive + archive-cli 命令到 ~/.local/bin（自动填本机 SKILL_DIR 路径 + 加到 PATH）
-#      - archive     : 意图串入口（走 auto 路由，一句话整理）
-#      - archive-cli : 子命令透传入口（路径无关，助手精确控制子命令+flag，跨机器通用）
-#   3. 同步 SKILL.md → ~/.qclaw/skills/desktop-archive-assistant/
-#   4. 创建 agent 目录 + models.json（检测 ollama 模型自动生成）
-#   5. 创建 workspace + 规则文件（SOUL.md/AGENTS.md/IDENTITY.md 等，路径自动替换）
-#      + .openclaw/workspace-state.json（setupCompletedAt 初始化标记，防被当半成品清理）
-#   6. 安全 merge openclaw.json（添加 desktop-archiver agent + 启用 skill）
-#   6.5 登记进 sync/sync_state.json 白名单（reconciliation 靠它认「已知本地 agent」，
-#       否则每次启动当孤儿清掉——这是远端 agent 消失的根因；hash=md5(实体文件)已逆向证实）
-#   7. 安装自检（verify）：逐项检查 依赖/代码/archive命令/SKILL.md/agent/skill/模型，
-#      任何一项失败都明确打印「是哪一步 + 怎么修」，并以非零退出码结束
+#   0.  检查并拉取 ollama 模型（ornith-9b Q8_0 9.5GB + ornith-vision + qwen3.5:4b）
+#   0.2 探测「要改造的目标 agent」（见下方 ★核心原理）
+#   1.  装 Python 依赖（pip install -r requirements.txt）
+#   2.  装 archive + archive-cli 命令到 ~/.local/bin（自动填本机 SKILL_DIR 路径 + 加到 PATH）
+#       - archive     : 意图串入口（走 auto 路由，一句话整理）
+#       - archive-cli : 子命令透传入口（路径无关，助手精确控制子命令+flag，跨机器通用）
+#   3.  同步 SKILL.md → ~/.qclaw/skills/desktop-archive-assistant/
+#   4.  目标 agent 的 models.json（缺失才生成，已有则保留不动）
+#   5.  把目标 agent 的 workspace 人设改造成「桌面整理助手」
+#       （SOUL.md/AGENTS.md/IDENTITY.md 覆盖，原文件自动备份；USER/MEMORY 等保留）
+#   6.  改造 openclaw.json 里的目标 agent（改名「桌面整理助手」+ 挂 desktop-archive-assistant 技能）
+#   7.  安装自检（verify）：逐项检查 依赖/代码/archive命令/SKILL.md/目标agent/skill/模型
+#
+# ★ 核心原理（血泪实证，务必先读）：
+#   qclaw 里 agent 能否「重启后存活」，取决于它是否被 qclaw 正规创建过（有注册出身）。
+#   纯脚本 new 一个自定义 id 的 agent 直接落盘（改 openclaw.json / 伪造 workspace-state /
+#   伪造 sync_state 全都没用）→ qclaw 启动 reconciliation 判定「本地凭空多出、无正规出身」→
+#   连 openclaw 带 sync_state 一起清除（这就是远端 desktop-archiver 反复消失的真正根因，已实证）。
+#   ✅ 正确做法 = 改造一个「已由 qclaw 正规创建」的 agent：改名 / 挂技能 / 写 SOUL 都是对
+#      已注册 agent 的字段修改，reconciliation 视为「已知 agent 的正常变更」，重启保留、
+#      name 不被回滚（已在远端实证）。所以本脚本不再新建 agent，而是改造你手动建好的 agent。
 #
 # 用法（在 desktop-archive-assistant 目录下）：
-#   bash scripts/install_qclaw_integration.sh                 # 默认检测
-#   bash scripts/install_qclaw_integration.sh --force         # 覆盖已有规则文件 + 重装依赖
+#   ① 先在 qclaw 里手动创建一个智能体（随便建个「智能Agent」，让它获得正规注册出身）
+#   ② 再跑本脚本，它会自动探测并把那个 agent 改造成「桌面整理助手」：
+#   bash scripts/install_qclaw_integration.sh                 # 自动探测目标 agent
+#   bash scripts/install_qclaw_integration.sh --agent-id=xxx  # 指定要改造哪个 agent
+#   bash scripts/install_qclaw_integration.sh --force         # 重装依赖（人设文件总会覆盖）
 #   bash scripts/install_qclaw_integration.sh --skip-pip      # 跳过 pip 安装
-#   bash scripts/install_qclaw_integration.sh --skip-models    # 跳过 ollama 模型拉取
-#   bash scripts/install_qclaw_integration.sh --skip-config   # 跳过 openclaw.json merge
+#   bash scripts/install_qclaw_integration.sh --skip-models   # 跳过 ollama 模型拉取
+#   bash scripts/install_qclaw_integration.sh --skip-config   # 跳过 openclaw.json 改造
 #
-# ⚠️ 重要：全新机器首次部署时，请先从 qclaw「专家广场」安装任意一个其他专家，
-#    再跑此脚本。否则 qclaw 启动时会覆盖 openclaw.json，导致 desktop-archiver agent 消失。
-#
-# 幂等：可重复跑，不会破坏已有配置。
+# 幂等：可重复跑；已改造过的 agent 会被自动识别复用，不会重复建。
 set -eo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATES="$SKILL_DIR/scripts/qclaw_templates"
 QCLAW_HOME="${HOME}/.qclaw"
-AGENT_ID="desktop-archiver"
-WORKSPACE="${QCLAW_HOME}/workspace-${AGENT_ID}"
-AGENT_DIR="${QCLAW_HOME}/agents/${AGENT_ID}/agent"
-SKILL_SYNC="${QCLAW_HOME}/skills/desktop-archive-assistant"
+SKILL_ID="desktop-archive-assistant"
+SKILL_SYNC="${QCLAW_HOME}/skills/${SKILL_ID}"
+OPENCLAW="${QCLAW_HOME}/openclaw.json"
+# 目标 agent：要被改造成「桌面整理助手」的、已由 qclaw 正规创建的 agent。
+# 由 --agent-id 指定，或在第 0.2 步自动探测后填充；WORKSPACE/AGENT_DIR 随之确定。
+TARGET_AGENT_ID=""
+WORKSPACE=""
+AGENT_DIR=""
 
 FORCE=0
 SKIP_PIP=0
@@ -48,6 +59,7 @@ for arg in "$@"; do
     --skip-pip)     SKIP_PIP=1 ;;
     --skip-config)  SKIP_CONFIG=1 ;;
     --skip-models)  SKIP_MODELS=1 ;;
+    --agent-id=*)   TARGET_AGENT_ID="${arg#*=}" ;;
     *) echo "unknown arg: $arg"; exit 1 ;;
   esac
 done
@@ -72,6 +84,77 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "❌ 未找到 python3，请先安装 Python 3.10+"
   exit 1
 fi
+
+# ---------- 0.2 探测要改造的目标 agent ----------
+# 见头部 ★核心原理：不新建 agent，只改造一个已由 qclaw 正规创建的 agent。
+# 探测优先级：
+#   1) --agent-id=xxx 显式指定
+#   2) 幂等：已有 name==「桌面整理助手」的 agent → 复用（重复跑不会认错人）
+#   3) 自动挑：排除内置 main 和专家广场(op-)，取剩下第一个（通常是你手动建的智能Agent）
+# 定位后从其 openclaw 条目读 workspace/agentDir（缺字段则回退默认路径）。
+echo "[0.2] 探测要改造的目标 agent"
+if [ ! -f "$OPENCLAW" ]; then
+  echo "  ❌ 未找到 $OPENCLAW"
+  echo "     请先启动一次 qclaw，并在 UI 里手动创建一个智能体，再重跑本脚本。"
+  exit 1
+fi
+
+DETECT=$(python3 - "$OPENCLAW" "$TARGET_AGENT_ID" "$QCLAW_HOME" <<'PY'
+import json, sys, os
+openclaw, want_id, qhome = sys.argv[1:4]
+with open(openclaw, encoding='utf-8') as f:
+    cfg = json.load(f)
+alist = cfg.get('agents', {}).get('list', [])
+
+def resolve(a):
+    aid = a.get('id')
+    ws = a.get('workspace') or os.path.join(qhome, 'workspace-' + aid)
+    ad = a.get('agentDir') or os.path.join(qhome, 'agents', aid, 'agent')
+    return aid, ws, ad
+
+target = None
+if want_id:                                   # 1) 显式指定
+    target = next((a for a in alist if a.get('id') == want_id), None)
+    if target is None:
+        print("ERR\t指定的 --agent-id=%s 不在 openclaw" % want_id); sys.exit(0)
+if target is None:                            # 2) 幂等：已改造过
+    target = next((a for a in alist if a.get('name') == '桌面整理助手'), None)
+if target is None:                            # 3) 自动挑（排除 main / op-）
+    for a in alist:
+        aid = a.get('id', '')
+        if aid == 'main' or aid.startswith('op-'):
+            continue
+        target = a; break
+if target is None:
+    print("NONE\t"); sys.exit(0)
+aid, ws, ad = resolve(target)
+print("OK\t%s\t%s\t%s\t%s" % (aid, ws, ad, target.get('name', '')))
+PY
+)
+
+STATUS=$(printf '%s' "$DETECT" | cut -f1)
+case "$STATUS" in
+  OK)
+    TARGET_AGENT_ID=$(printf '%s' "$DETECT" | cut -f2)
+    WORKSPACE=$(printf '%s' "$DETECT" | cut -f3)
+    AGENT_DIR=$(printf '%s' "$DETECT" | cut -f4)
+    OLD_NAME=$(printf '%s' "$DETECT" | cut -f5)
+    echo "  ✅ 目标 agent: $TARGET_AGENT_ID（原名: ${OLD_NAME:-未命名}）"
+    echo "     workspace: $WORKSPACE"
+    echo "     agentDir : $AGENT_DIR"
+    ;;
+  NONE)
+    echo "  ❌ 没找到可改造的 agent（除内置 main 与专家广场 op- 外，没有其它 agent）"
+    echo "     请先在 qclaw UI 手动创建一个智能体（随便建个「智能Agent」，让它获得正规注册出身），"
+    echo "     再重跑本脚本；或用 --agent-id=<id> 指定要改造哪个。"
+    exit 1
+    ;;
+  *)
+    echo "  ❌ $(printf '%s' "$DETECT" | cut -f2)"
+    echo "     用 --agent-id=<id> 指定一个存在的 agent。"
+    exit 1
+    ;;
+esac
 
 # ---------- 0.5 拉 ollama 模型（ornith + qwen3.5）----------
 echo "[0/6] 检查并拉取 ollama 模型"
@@ -528,192 +611,88 @@ echo ""
 echo "[5/6] 创建 workspace + 规则文件"
 mkdir -p "$WORKSPACE/memory"
 
-install_template() {
+# 人设/规则文件：改造语义下总是覆盖成「桌面整理助手」的版本（原文件自动备份，防误伤）
+install_persona() {
   local src="$TEMPLATES/$1"
   local dst="$WORKSPACE/$1"
-  if [ "$FORCE" -eq 1 ] || [ ! -f "$dst" ]; then
-    # 替换路径占位符 __SKILL_DIR__ → 实际路径
+  if [ -f "$dst" ]; then
+    cp "$dst" "${dst}.bak.$(date +%Y%m%d%H%M%S)"
     sed "s|__SKILL_DIR__|${SKILL_DIR}|g" "$src" > "$dst"
-    echo "  ✅ $1"
+    echo "  ✅ $1（人设已覆盖，原文件已备份）"
   else
-    echo "  ℹ️  $1 已存在，跳过（用 --force 覆盖）"
+    sed "s|__SKILL_DIR__|${SKILL_DIR}|g" "$src" > "$dst"
+    echo "  ✅ $1（人设已写入）"
   fi
 }
 
-install_template "SOUL.md"
-install_template "AGENTS.md"
-install_template "IDENTITY.md"
-install_template "USER.md"
-install_template "MEMORY.md"
-install_template "HEARTBEAT.md"
-install_template "TOOLS.md"
-
-# 5.5 关键：写 .openclaw/workspace-state.json（标记该 agent 已完成 bootstrap/setup）
-# ⚠️ 这是 qclaw UI 创建 agent 时会做、而旧脚本漏掉的一步。缺它 → qclaw reconciliation
-#    可能把该 agent 当「未完成初始化的半成品」清掉（远端 agent 消失的根因之一）。
-WS_STATE_DIR="$WORKSPACE/.openclaw"
-WS_STATE_FILE="$WS_STATE_DIR/workspace-state.json"
-mkdir -p "$WS_STATE_DIR"
-if [ "$FORCE" -eq 1 ] || [ ! -f "$WS_STATE_FILE" ]; then
-  NOW_ISO=$(python3 -c "import datetime;print(datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.')+f'{datetime.datetime.utcnow().microsecond//1000:03d}Z')")
-  cat > "$WS_STATE_FILE" <<EOF
-{
-  "version": 1,
-  "bootstrapSeededAt": "$NOW_ISO",
-  "setupCompletedAt": "$NOW_ISO"
+# 用户数据文件：缺失才建，已有则保留（不覆盖用户积累的记忆/偏好）
+install_userdata() {
+  local src="$TEMPLATES/$1"
+  local dst="$WORKSPACE/$1"
+  if [ ! -f "$dst" ]; then
+    sed "s|__SKILL_DIR__|${SKILL_DIR}|g" "$src" > "$dst"
+    echo "  ✅ $1（新建）"
+  else
+    echo "  ℹ️  $1 已存在，保留用户数据（不覆盖）"
+  fi
 }
-EOF
-  echo "  ✅ .openclaw/workspace-state.json（setupCompletedAt 标记，防被当半成品清理）"
-else
-  echo "  ℹ️  .openclaw/workspace-state.json 已存在，跳过（用 --force 覆盖）"
-fi
+
+install_persona  "SOUL.md"
+install_persona  "AGENTS.md"
+install_persona  "IDENTITY.md"
+install_persona  "HEARTBEAT.md"
+install_persona  "TOOLS.md"
+install_userdata "USER.md"
+install_userdata "MEMORY.md"
 
 # ---------- 6. merge openclaw.json ----------
 echo ""
-echo "[6/6] merge openclaw.json"
+echo "[6/6] 改造 openclaw.json：把 $TARGET_AGENT_ID 变成「桌面整理助手」"
 if [ "$SKIP_CONFIG" -eq 0 ]; then
-  OPENCLAW="$QCLAW_HOME/openclaw.json"
-
   if [ ! -f "$OPENCLAW" ]; then
-    echo "  ⚠️  $OPENCLAW 不存在，跳过（qclaw 首次启动后重跑此脚本）"
+    echo "  ⚠️  $OPENCLAW 不存在，跳过"
   else
     # 备份
     cp "$OPENCLAW" "${OPENCLAW}.bak.$(date +%Y%m%d%H%M%S)"
 
-    # 用 python 安全 merge
-    python3 -c "
+    # 改造目标 agent（不新建！只改已注册 agent 的字段：改名 + 身份 + 挂技能）
+    python3 - "$OPENCLAW" "$TARGET_AGENT_ID" "$SKILL_ID" <<'PY'
 import json, sys
 
-config_path = sys.argv[1]
-workspace = sys.argv[2]
-agent_dir = sys.argv[3]
-agent_id = 'desktop-archiver'
-
+config_path, target_id, skill_id = sys.argv[1:4]
 with open(config_path, 'r', encoding='utf-8') as f:
     cfg = json.load(f)
 
-# 1. 添加 agent 到 agents.list（如果不存在）
-agents_list = cfg.setdefault('agents', {}).setdefault('list', [])
-exists = any(a.get('id') == agent_id for a in agents_list)
-if not exists:
-    agents_list.append({
-        'id': agent_id,
-        'name': '桌面整理助手',
-        'workspace': workspace,
-        'identity': {
-            'name': '桌面整理助手',
-            'emoji': '🗂️',
-            'avatar': '🗂️'
-        },
-        'agentDir': agent_dir,
-        'reasoningDefault': 'stream',
-        'skills': [
-            'desktop-archive-assistant',
-            'find-skills',
-            'qclaw-env',
-            'qclaw-rules',
-            'qclaw-cron-skill'
-        ]
-    })
-    print('  ✅ agent desktop-archiver 已添加到 agents.list')
-else:
-    print('  ℹ️  agent desktop-archiver 已存在，跳过')
+alist = cfg.setdefault('agents', {}).setdefault('list', [])
+a = next((x for x in alist if x.get('id') == target_id), None)
+if a is None:
+    print(f'  ❌ 目标 agent {target_id} 不在 openclaw，改造中止')
+    sys.exit(1)
 
-# 2. 启用 skill
-skills = cfg.setdefault('skills', {})
-if 'desktop-archive-assistant' not in skills:
-    skills['desktop-archive-assistant'] = {'enabled': True}
-    print('  ✅ skill desktop-archive-assistant 已启用')
+# 1) 改名 + 身份 → 桌面整理助手
+a['name'] = '桌面整理助手'
+idn = a.setdefault('identity', {})
+idn['name'] = '桌面整理助手'
+idn['emoji'] = '🗂️'
+idn['avatar'] = '🗂️'
+a.setdefault('reasoningDefault', 'stream')
+
+# 2) 挂技能（保留 agent 原有其他技能，去重，放最前）
+skills = a.setdefault('skills', [])
+if skill_id not in skills:
+    skills.insert(0, skill_id)
+    print(f'  ✅ 已挂载技能 {skill_id}')
 else:
-    skills['desktop-archive-assistant']['enabled'] = True
-    print('  ℹ️  skill desktop-archive-assistant 已启用（更新）')
+    print(f'  ℹ️  技能 {skill_id} 已挂载')
+
+# 3) 全局启用该 skill
+sk = cfg.setdefault('skills', {})
+sk[skill_id] = {'enabled': True}
 
 with open(config_path, 'w', encoding='utf-8') as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
 
-print('  ✅ openclaw.json 已更新（备份已保存）')
-" "$OPENCLAW" "$WORKSPACE" "$AGENT_DIR"
-  fi
-else
-  echo "  ⏭️  --skip-config，跳过"
-fi
-
-# ---------- 6.5 登记进 sync/sync_state.json 白名单 ----------
-# ⚠️ 核心修复：qclaw 启动时的 reconciliation 用 ~/.qclaw/sync/sync_state.json（本地全量扫描
-#    产物，非云端下发）判定 agent 是否「已知本地 agent」。旧脚本从不登记 → 每次启动被当孤儿清掉
-#    （远端 agent 消失的根因）。
-# 机制已逆向证实：hash = md5(对应实体文件内容)。souls=md5(SOUL.md)、memories=md5(MEMORY.md)
-#    已精确匹配本机活样本。identities/agents 维度用文件 md5 占位——qclaw 首启 full scan
-#    (lastFullScanAt) 会用自身算法重算回写，占位值不影响「条目存在=不被当孤儿」这一核心作用。
-# 安全性：sync_state 是本地维护的基线（本机 desktop-archiver 的 hash 就是本地算的且存活），
-#    本地写入条目不会触发「云端已删→删本地」。若文件不存在则跳过（qclaw 尚未初始化同步，
-#    agent 会在首次 full scan 时自动登记）。
-echo ""
-echo "[6.5] 登记 desktop-archiver 到 sync_state.json 白名单"
-if [ "$SKIP_CONFIG" -eq 0 ]; then
-  SYNC_STATE="$QCLAW_HOME/sync/sync_state.json"
-  if [ ! -f "$SYNC_STATE" ]; then
-    echo "  ℹ️  $SYNC_STATE 不存在，跳过（qclaw 首次 full scan 会自动登记本 agent）"
-  else
-    cp "$SYNC_STATE" "${SYNC_STATE}.bak.$(date +%Y%m%d%H%M%S)"
-    python3 - "$SYNC_STATE" "$WORKSPACE" "$AGENT_DIR" "$AGENT_ID" <<'PY'
-import json, sys, os, hashlib, time
-
-ss_path, workspace, agent_dir, agent_id = sys.argv[1:5]
-
-def md5_file(p):
-    try:
-        with open(p, 'rb') as f:
-            return hashlib.md5(f.read()).hexdigest()
-    except FileNotFoundError:
-        return None
-
-with open(ss_path, 'r', encoding='utf-8') as f:
-    ss = json.load(f)
-
-now_ms = int(time.time() * 1000)
-
-# 5 维度对应的实体文件
-soul   = md5_file(os.path.join(workspace, 'SOUL.md'))
-mem    = md5_file(os.path.join(workspace, 'MEMORY.md'))
-ident  = md5_file(os.path.join(workspace, 'IDENTITY.md'))   # 占位，full scan 会修正
-models = md5_file(os.path.join(agent_dir, 'models.json'))   # 占位，full scan 会修正
-
-def put(section, h):
-    if h is None:
-        return
-    sec = ss.setdefault(section, {})
-    sec[agent_id] = {'hash': h, 'lastChangedAt': now_ms}
-
-# souls / memories 精确 md5；agents / identities 占位（qclaw full scan 会重算）
-put('agents',     models)
-put('identities', ident)
-put('souls',      soul)
-put('memories',   mem)
-
-# diaries: 遍历 workspace/memory/*.md，逐文件登记 md5（与本机结构一致）
-mem_dir = os.path.join(workspace, 'memory')
-files = {}
-if os.path.isdir(mem_dir):
-    for fn in sorted(os.listdir(mem_dir)):
-        if fn.endswith('.md'):
-            rel = f'memory/{fn}'
-            h = md5_file(os.path.join(mem_dir, fn))
-            if h:
-                files[rel] = {'hash': h, 'lastChangedAt': now_ms}
-if files:
-    ss.setdefault('diaries', {})[agent_id] = {'files': files, 'lastChangedAt': now_ms}
-
-# 触发 qclaw 首启做一次全量扫描（重算并回写所有维度精确 hash）
-ss['lastFullScanAt'] = 0
-ss['lastUpdatedAt'] = now_ms
-
-with open(ss_path, 'w', encoding='utf-8') as f:
-    json.dump(ss, f, indent=2, ensure_ascii=False)
-
-dims = [s for s in ('agents','identities','souls','memories') if ss.get(s,{}).get(agent_id)]
-print(f"  ✅ desktop-archiver 已登记 {len(dims)} 维度: {', '.join(dims)}" + (f" + diaries({len(files)}个)" if files else ""))
-print("  ℹ️  已置 lastFullScanAt=0，qclaw 下次启动会全量扫描并回写精确 hash")
+print(f'  ✅ agent {target_id} 已改造为「桌面整理助手」（name/identity/skill 已更新，备份已保存）')
 PY
   fi
 else
@@ -785,51 +764,33 @@ else
   fail "workspace 规则文件缺失 → 重跑本脚本 --force（第 5 步生成）"
 fi
 
-# 7b) workspace-state.json 已就位（setupCompletedAt 初始化标记）
-if [ -f "$WORKSPACE/.openclaw/workspace-state.json" ] && \
-   python3 -c "import json;d=json.load(open('$WORKSPACE/.openclaw/workspace-state.json'));exit(0 if d.get('setupCompletedAt') else 1)" 2>/dev/null; then
-  pass "workspace-state.json 已就位（含 setupCompletedAt，防被当半成品清理）"
-else
-  fail "workspace-state.json 缺失/无 setupCompletedAt → 重跑本脚本（第 5.5 步生成）"
-fi
-
-# 8) openclaw.json 里有 desktop-archiver agent 且 skill 已启用
-OPENCLAW="$QCLAW_HOME/openclaw.json"
+# 8) openclaw.json 里目标 agent 已被改造成「桌面整理助手」且 skill 已挂载启用
 if [ -f "$OPENCLAW" ]; then
-  AGENT_CHECK=$(python3 -c "
-import json
-cfg=json.load(open('$OPENCLAW'))
-alist=cfg.get('agents',{}).get('list',[])
-has_agent=any(a.get('id')=='$AGENT_ID' for a in alist)
-skill=cfg.get('skills',{}).get('desktop-archive-assistant',{})
-has_skill=bool(skill.get('enabled'))
-print('OK' if (has_agent and has_skill) else ('NOAGENT' if not has_agent else 'NOSKILL'))
-" 2>/dev/null || echo "ERR")
+  AGENT_CHECK=$(python3 - "$OPENCLAW" "$TARGET_AGENT_ID" "$SKILL_ID" <<'PY' 2>/dev/null || true
+import json, sys
+openclaw, tid, sid = sys.argv[1:4]
+cfg = json.load(open(openclaw))
+alist = cfg.get('agents', {}).get('list', [])
+a = next((x for x in alist if x.get('id') == tid), None)
+if a is None:
+    print('NOAGENT'); sys.exit(0)
+name_ok = (a.get('name') == '桌面整理助手')
+skill_on_agent = sid in (a.get('skills') or [])
+skill_enabled = bool(cfg.get('skills', {}).get(sid, {}).get('enabled'))
+print('OK' if (name_ok and skill_on_agent and skill_enabled)
+      else ('NONAME' if not name_ok else 'NOSKILL'))
+PY
+)
+  [ -z "$AGENT_CHECK" ] && AGENT_CHECK="ERR"
   case "$AGENT_CHECK" in
-    OK)      pass "openclaw.json 已含 desktop-archiver agent 且 skill 已启用" ;;
-    NOAGENT) fail "openclaw.json 缺 desktop-archiver agent → 先从 qclaw「专家广场」装任意一个专家(触发 agent 持久化)，再重跑本脚本（见脚本顶部⚠️说明）" ;;
-    NOSKILL) fail "openclaw.json 中 skill 未启用 → 重跑本脚本: --skip-pip --skip-models" ;;
+    OK)      pass "openclaw.json：$TARGET_AGENT_ID 已改造为「桌面整理助手」且 skill 已启用" ;;
+    NOAGENT) fail "openclaw.json 里找不到目标 agent $TARGET_AGENT_ID → 确认它存在，或用 --agent-id 指定" ;;
+    NONAME)  fail "目标 agent 未改名成「桌面整理助手」→ 重跑本脚本（第 6 步）" ;;
+    NOSKILL) fail "技能 $SKILL_ID 未挂载/未启用 → 重跑本脚本（第 6 步）" ;;
     *)       fail "openclaw.json 解析失败 → 检查文件是否损坏: $OPENCLAW" ;;
   esac
 else
   fail "openclaw.json 不存在 → 先启动一次 qclaw 生成配置，再重跑本脚本"
-fi
-
-# 8b) sync_state.json 已登记 desktop-archiver（reconciliation 防孤儿的关键）
-SYNC_STATE="$QCLAW_HOME/sync/sync_state.json"
-if [ -f "$SYNC_STATE" ]; then
-  if python3 -c "
-import json
-d=json.load(open('$SYNC_STATE'))
-ok=any(d.get(s,{}).get('$AGENT_ID') for s in ('agents','identities','souls','memories'))
-exit(0 if ok else 1)
-" 2>/dev/null; then
-    pass "sync_state.json 已登记 desktop-archiver（reconciliation 会认它为已知本地 agent，重启不被清）"
-  else
-    fail "sync_state.json 未登记 desktop-archiver → 重跑本脚本（第 6.5 步登记；否则重启后 agent 会消失）"
-  fi
-else
-  warn "sync_state.json 不存在（qclaw 尚未初始化同步；首次 full scan 会自动登记本 agent）"
 fi
 
 # 9) ollama 服务 + 关键模型（WARN 级：缺了整理会降级为规则模式，仍可跑，不致命）
