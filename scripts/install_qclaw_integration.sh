@@ -10,7 +10,10 @@
 #   3. 同步 SKILL.md → ~/.qclaw/skills/desktop-archive-assistant/
 #   4. 创建 agent 目录 + models.json（检测 ollama 模型自动生成）
 #   5. 创建 workspace + 规则文件（SOUL.md/AGENTS.md/IDENTITY.md 等，路径自动替换）
+#      + .openclaw/workspace-state.json（setupCompletedAt 初始化标记，防被当半成品清理）
 #   6. 安全 merge openclaw.json（添加 desktop-archiver agent + 启用 skill）
+#   6.5 登记进 sync/sync_state.json 白名单（reconciliation 靠它认「已知本地 agent」，
+#       否则每次启动当孤儿清掉——这是远端 agent 消失的根因；hash=md5(实体文件)已逆向证实）
 #   7. 安装自检（verify）：逐项检查 依赖/代码/archive命令/SKILL.md/agent/skill/模型，
 #      任何一项失败都明确打印「是哪一步 + 怎么修」，并以非零退出码结束
 #
@@ -545,6 +548,26 @@ install_template "MEMORY.md"
 install_template "HEARTBEAT.md"
 install_template "TOOLS.md"
 
+# 5.5 关键：写 .openclaw/workspace-state.json（标记该 agent 已完成 bootstrap/setup）
+# ⚠️ 这是 qclaw UI 创建 agent 时会做、而旧脚本漏掉的一步。缺它 → qclaw reconciliation
+#    可能把该 agent 当「未完成初始化的半成品」清掉（远端 agent 消失的根因之一）。
+WS_STATE_DIR="$WORKSPACE/.openclaw"
+WS_STATE_FILE="$WS_STATE_DIR/workspace-state.json"
+mkdir -p "$WS_STATE_DIR"
+if [ "$FORCE" -eq 1 ] || [ ! -f "$WS_STATE_FILE" ]; then
+  NOW_ISO=$(python3 -c "import datetime;print(datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.')+f'{datetime.datetime.utcnow().microsecond//1000:03d}Z')")
+  cat > "$WS_STATE_FILE" <<EOF
+{
+  "version": 1,
+  "bootstrapSeededAt": "$NOW_ISO",
+  "setupCompletedAt": "$NOW_ISO"
+}
+EOF
+  echo "  ✅ .openclaw/workspace-state.json（setupCompletedAt 标记，防被当半成品清理）"
+else
+  echo "  ℹ️  .openclaw/workspace-state.json 已存在，跳过（用 --force 覆盖）"
+fi
+
 # ---------- 6. merge openclaw.json ----------
 echo ""
 echo "[6/6] merge openclaw.json"
@@ -615,6 +638,88 @@ else
   echo "  ⏭️  --skip-config，跳过"
 fi
 
+# ---------- 6.5 登记进 sync/sync_state.json 白名单 ----------
+# ⚠️ 核心修复：qclaw 启动时的 reconciliation 用 ~/.qclaw/sync/sync_state.json（本地全量扫描
+#    产物，非云端下发）判定 agent 是否「已知本地 agent」。旧脚本从不登记 → 每次启动被当孤儿清掉
+#    （远端 agent 消失的根因）。
+# 机制已逆向证实：hash = md5(对应实体文件内容)。souls=md5(SOUL.md)、memories=md5(MEMORY.md)
+#    已精确匹配本机活样本。identities/agents 维度用文件 md5 占位——qclaw 首启 full scan
+#    (lastFullScanAt) 会用自身算法重算回写，占位值不影响「条目存在=不被当孤儿」这一核心作用。
+# 安全性：sync_state 是本地维护的基线（本机 desktop-archiver 的 hash 就是本地算的且存活），
+#    本地写入条目不会触发「云端已删→删本地」。若文件不存在则跳过（qclaw 尚未初始化同步，
+#    agent 会在首次 full scan 时自动登记）。
+echo ""
+echo "[6.5] 登记 desktop-archiver 到 sync_state.json 白名单"
+if [ "$SKIP_CONFIG" -eq 0 ]; then
+  SYNC_STATE="$QCLAW_HOME/sync/sync_state.json"
+  if [ ! -f "$SYNC_STATE" ]; then
+    echo "  ℹ️  $SYNC_STATE 不存在，跳过（qclaw 首次 full scan 会自动登记本 agent）"
+  else
+    cp "$SYNC_STATE" "${SYNC_STATE}.bak.$(date +%Y%m%d%H%M%S)"
+    python3 - "$SYNC_STATE" "$WORKSPACE" "$AGENT_DIR" "$AGENT_ID" <<'PY'
+import json, sys, os, hashlib, time
+
+ss_path, workspace, agent_dir, agent_id = sys.argv[1:5]
+
+def md5_file(p):
+    try:
+        with open(p, 'rb') as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except FileNotFoundError:
+        return None
+
+with open(ss_path, 'r', encoding='utf-8') as f:
+    ss = json.load(f)
+
+now_ms = int(time.time() * 1000)
+
+# 5 维度对应的实体文件
+soul   = md5_file(os.path.join(workspace, 'SOUL.md'))
+mem    = md5_file(os.path.join(workspace, 'MEMORY.md'))
+ident  = md5_file(os.path.join(workspace, 'IDENTITY.md'))   # 占位，full scan 会修正
+models = md5_file(os.path.join(agent_dir, 'models.json'))   # 占位，full scan 会修正
+
+def put(section, h):
+    if h is None:
+        return
+    sec = ss.setdefault(section, {})
+    sec[agent_id] = {'hash': h, 'lastChangedAt': now_ms}
+
+# souls / memories 精确 md5；agents / identities 占位（qclaw full scan 会重算）
+put('agents',     models)
+put('identities', ident)
+put('souls',      soul)
+put('memories',   mem)
+
+# diaries: 遍历 workspace/memory/*.md，逐文件登记 md5（与本机结构一致）
+mem_dir = os.path.join(workspace, 'memory')
+files = {}
+if os.path.isdir(mem_dir):
+    for fn in sorted(os.listdir(mem_dir)):
+        if fn.endswith('.md'):
+            rel = f'memory/{fn}'
+            h = md5_file(os.path.join(mem_dir, fn))
+            if h:
+                files[rel] = {'hash': h, 'lastChangedAt': now_ms}
+if files:
+    ss.setdefault('diaries', {})[agent_id] = {'files': files, 'lastChangedAt': now_ms}
+
+# 触发 qclaw 首启做一次全量扫描（重算并回写所有维度精确 hash）
+ss['lastFullScanAt'] = 0
+ss['lastUpdatedAt'] = now_ms
+
+with open(ss_path, 'w', encoding='utf-8') as f:
+    json.dump(ss, f, indent=2, ensure_ascii=False)
+
+dims = [s for s in ('agents','identities','souls','memories') if ss.get(s,{}).get(agent_id)]
+print(f"  ✅ desktop-archiver 已登记 {len(dims)} 维度: {', '.join(dims)}" + (f" + diaries({len(files)}个)" if files else ""))
+print("  ℹ️  已置 lastFullScanAt=0，qclaw 下次启动会全量扫描并回写精确 hash")
+PY
+  fi
+else
+  echo "  ⏭️  --skip-config，跳过"
+fi
+
 # ---------- 7. 安装自检（verify） ----------
 echo ""
 echo "[7/7] 安装自检（verify）—— 逐项检查是否真的装好"
@@ -680,6 +785,14 @@ else
   fail "workspace 规则文件缺失 → 重跑本脚本 --force（第 5 步生成）"
 fi
 
+# 7b) workspace-state.json 已就位（setupCompletedAt 初始化标记）
+if [ -f "$WORKSPACE/.openclaw/workspace-state.json" ] && \
+   python3 -c "import json;d=json.load(open('$WORKSPACE/.openclaw/workspace-state.json'));exit(0 if d.get('setupCompletedAt') else 1)" 2>/dev/null; then
+  pass "workspace-state.json 已就位（含 setupCompletedAt，防被当半成品清理）"
+else
+  fail "workspace-state.json 缺失/无 setupCompletedAt → 重跑本脚本（第 5.5 步生成）"
+fi
+
 # 8) openclaw.json 里有 desktop-archiver agent 且 skill 已启用
 OPENCLAW="$QCLAW_HOME/openclaw.json"
 if [ -f "$OPENCLAW" ]; then
@@ -700,6 +813,23 @@ print('OK' if (has_agent and has_skill) else ('NOAGENT' if not has_agent else 'N
   esac
 else
   fail "openclaw.json 不存在 → 先启动一次 qclaw 生成配置，再重跑本脚本"
+fi
+
+# 8b) sync_state.json 已登记 desktop-archiver（reconciliation 防孤儿的关键）
+SYNC_STATE="$QCLAW_HOME/sync/sync_state.json"
+if [ -f "$SYNC_STATE" ]; then
+  if python3 -c "
+import json
+d=json.load(open('$SYNC_STATE'))
+ok=any(d.get(s,{}).get('$AGENT_ID') for s in ('agents','identities','souls','memories'))
+exit(0 if ok else 1)
+" 2>/dev/null; then
+    pass "sync_state.json 已登记 desktop-archiver（reconciliation 会认它为已知本地 agent，重启不被清）"
+  else
+    fail "sync_state.json 未登记 desktop-archiver → 重跑本脚本（第 6.5 步登记；否则重启后 agent 会消失）"
+  fi
+else
+  warn "sync_state.json 不存在（qclaw 尚未初始化同步；首次 full scan 会自动登记本 agent）"
 fi
 
 # 9) ollama 服务 + 关键模型（WARN 级：缺了整理会降级为规则模式，仍可跑，不致命）
