@@ -4,16 +4,46 @@
 # 在目标机器上跑一次，自动完成：
 #   0.  检查并拉取 ollama 模型（ornith-9b Q8_0 9.5GB + ornith-vision + qwen3.5:4b）
 #   0.2 探测「要改造的目标 agent」（见下方 ★核心原理）
-#   1.  装 Python 依赖（pip install -r requirements.txt）
-#   2.  装 archive + archive-cli 命令到 ~/.local/bin（自动填本机 SKILL_DIR 路径 + 加到 PATH）
+#   1.  装 Python 依赖（用 ★锁定的解释器 $PYBIN 跑 pip install -r requirements.txt，见 ★★解释器错配根因）
+#   2.  装 archive + archive-cli 命令到 ~/.local/bin（自动填本机 SKILL_DIR + ★把 $PYBIN 绝对路径写死进 wrapper + 加到 PATH）
 #       - archive     : 意图串入口（走 auto 路由，一句话整理）
 #       - archive-cli : 子命令透传入口（路径无关，助手精确控制子命令+flag，跨机器通用）
 #   3.  同步 SKILL.md → ~/.qclaw/skills/desktop-archive-assistant/
 #   4.  目标 agent 的 models.json（缺失才生成，已有则保留不动）
 #   5.  把目标 agent 的 workspace 人设改造成「桌面整理助手」
 #       （SOUL.md/AGENTS.md/IDENTITY.md 覆盖，原文件自动备份；USER/MEMORY 等保留）
-#   6.  改造 openclaw.json 里的目标 agent（改名「桌面整理助手」+ 挂 desktop-archive-assistant 技能）
-#   7.  安装自检（verify）：逐项检查 依赖/代码/archive命令/SKILL.md/目标agent/skill/模型
+#   6.  改造 openclaw.json 里的目标 agent（改名「桌面整理助手」+ 挂技能 + ★给它补上独立 model 字段
+#       + ★同步 .last-good 防 clobber 回滚，见下方 ★★模型字段根因 / ★★clobber）
+#   7.  安装自检（verify）：逐项检查 依赖/代码/archive命令/SKILL.md/目标agent/skill/模型/last-good一致
+#
+# ★★ 模型字段根因（血泪实证 + 2026-07-02 纠正，第 6 步为什么要给 agent 补 model 字段）：
+#   现象：agent「完全不看 SKILL.md、瞎编、改名被还原」。
+#   ⚠️ 一度误判为「继承 defaults 的 9B 小模型太弱、扛不住两跳指令」——这是【错的】。
+#   实证纠正：给 agent 补上独立 model 字段（先随手指到 qclaw/modelroute）后问题消失；此后【手动切回
+#   本地 9B 模型，照样能正常读 SKILL.md 并执行到路径】。可见 9B 本身有能力，"换强模型"只是歪打正着。
+#   ✅ 真正起作用的是「给该 agent 补上了独立的 model 字段」这个结构性动作本身（无论它指向谁）——
+#      推测之前缺 model 字段导致该 agent 的 skill 上下文没被正确初始化/注入，于是压根没拿到读
+#      SKILL.md 的指令 → 完全不读。补上 model 字段后配置结构完整，skill 注入正常，就能读了。
+#   → 所以本脚本第 6 步的关键是「给目标 agent 写入独立 model 字段」；默认值仍用 qclaw/modelroute
+#     只是图稳（云端强模型无坏处），用 --agent-model 可换成本地模型、效果一样。
+#   （另注：SOUL.md/IDENTITY.md 根本不注入 prompt，改它们无用。）
+#
+# ★★ clobber 完整性保护（第 6 步为什么要同步 .last-good）：
+#   qclaw 启动时会拿 openclaw.json 与 openclaw.json.last-good 比对，若只改了主文件、last-good 没同步，
+#   会判定主文件「被污染」→ 回滚成 last-good，我们的改名/挂技能/换模型全被抹掉（已在远端反复踩到，
+#   现场会生成 openclaw.json.clobbered.<时间戳>）。✅ 修法 = 主文件与 .last-good 同一套改造一起写。
+#
+# ★★ Python 解释器错配根因（2026-07-02 实证，第 1/2 步为什么要锁定 $PYBIN 绝对路径）：
+#   现象：agent 跑 archive-cli 报 `ModuleNotFoundError: No module named 'yaml'`（或 PIL/numpy），
+#         但你在终端里手动跑同一命令却完全正常。
+#   根因：archive-cli wrapper 原本 `exec python3 -m ...` 用的是【PATH 里第一个 python3】。
+#         而 qclaw 是 GUI 应用，其子进程 PATH 常是 launchd 最小 PATH（/usr/bin:/bin:/usr/sbin:/sbin），
+#         命中的 python3 可能跟你终端里（pyenv/homebrew）装依赖用的那个【不是同一个】→
+#         依赖装到了解释器 A，qclaw 跑 archive-cli 用的却是解释器 B（没装依赖）→ import 失败。
+#   ✅ 修法（本脚本已实现）：安装时把「装依赖用的那个 python3」解析成【绝对路径 $PYBIN】
+#      （python3 -c 'sys.executable' 拿真实解释器，能穿透 pyenv shim），
+#      第 1 步用它装依赖，第 2 步把它【写死进 archive/archive-cli wrapper】（exec 绝对路径），
+#      让「装」和「跑」永远是同一个解释器，与 PATH 无关。verify 也改用 $PYBIN 检测，检的就是 agent 实际会用的那个。
 #
 # ★ 核心原理（血泪实证，务必先读）：
 #   qclaw 里 agent 能否「重启后存活」，取决于它是否被 qclaw 正规创建过（有注册出身）。
@@ -33,6 +63,8 @@
 #   bash scripts/install_qclaw_integration.sh --skip-pip      # 跳过 pip 安装
 #   bash scripts/install_qclaw_integration.sh --skip-models   # 跳过 ollama 模型拉取
 #   bash scripts/install_qclaw_integration.sh --skip-config   # 跳过 openclaw.json 改造
+#   bash scripts/install_qclaw_integration.sh --agent-model=ollama/ornith-9b:latest  # 独立 model 指本地
+#   bash scripts/install_qclaw_integration.sh --no-model-override                    # 不写 model（不推荐，会触发"不看SKILL.md"）
 #
 # 幂等：可重复跑；已改造过的 agent 会被自动识别复用，不会重复建。
 set -eo pipefail
@@ -49,17 +81,28 @@ TARGET_AGENT_ID=""
 WORKSPACE=""
 AGENT_DIR=""
 
+# ★ 目标 agent 的独立 model 字段（根因修复，务必先读头部 ★★模型字段根因）：
+#   关键不是"模型多强"，而是"该 agent 有没有自己的 model 字段"——没有就不会被正确初始化 skill 上下文，
+#   于是不看 SKILL.md、瞎编。补上独立 model 字段后即恢复正常（切回本地 9B 也一样能干活，已实证）。
+#   默认值用 qclaw/modelroute 只是图稳（qclaw 内置云端路由，heartbeat/imageModel/pdfModel 本来就在用、
+#   env 现成，无需在 providers 显式声明）；换本地也完全可以。
+#   --agent-model=xxx 可覆盖（如指本地：--agent-model=ollama/ornith-9b:latest）；
+#   --no-model-override 则完全不写 model 字段（不推荐，正是这会触发"不看 SKILL.md"的老问题）。
+AGENT_MODEL="qclaw/modelroute"
+
 FORCE=0
 SKIP_PIP=0
 SKIP_CONFIG=0
 SKIP_MODELS=0
 for arg in "$@"; do
   case "$arg" in
-    --force)        FORCE=1 ;;
-    --skip-pip)     SKIP_PIP=1 ;;
-    --skip-config)  SKIP_CONFIG=1 ;;
-    --skip-models)  SKIP_MODELS=1 ;;
-    --agent-id=*)   TARGET_AGENT_ID="${arg#*=}" ;;
+    --force)             FORCE=1 ;;
+    --skip-pip)          SKIP_PIP=1 ;;
+    --skip-config)       SKIP_CONFIG=1 ;;
+    --skip-models)       SKIP_MODELS=1 ;;
+    --agent-id=*)        TARGET_AGENT_ID="${arg#*=}" ;;
+    --agent-model=*)     AGENT_MODEL="${arg#*=}" ;;
+    --no-model-override) AGENT_MODEL="" ;;
     *) echo "unknown arg: $arg"; exit 1 ;;
   esac
 done
@@ -84,6 +127,15 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "❌ 未找到 python3，请先安装 Python 3.10+"
   exit 1
 fi
+
+# ★ 锁定 Python 解释器绝对路径（见头部 ★★解释器错配根因）：
+#   用 sys.executable 拿到「当前 python3」的真实绝对路径（能穿透 pyenv/homebrew 的 shim），
+#   后续装依赖、生成 wrapper、verify 全部统一用它 → 装依赖的解释器 == qclaw 跑 archive-cli 的解释器。
+PYBIN="$(python3 -c 'import sys; print(sys.executable)' 2>/dev/null || true)"
+if [ -z "$PYBIN" ] || [ ! -x "$PYBIN" ]; then
+  PYBIN="$(command -v python3)"
+fi
+echo "PYBIN:      $PYBIN  ($("$PYBIN" --version 2>&1))"
 
 # ---------- 0.2 探测要改造的目标 agent ----------
 # 见头部 ★核心原理：不新建 agent，只改造一个已由 qclaw 正规创建的 agent。
@@ -381,13 +433,14 @@ fi
 echo "[1/6] 装 Python 依赖"
 if [ "$SKIP_PIP" -eq 1 ]; then
   echo "  ⏭️  --skip-pip，跳过"
-elif [ "$FORCE" -eq 0 ] && python3 -c "import yaml, PIL, numpy, tqdm" 2>/dev/null; then
-  echo "  ℹ️  核心依赖已装，跳过（用 --force 重装）"
+elif [ "$FORCE" -eq 0 ] && "$PYBIN" -c "import yaml, PIL, numpy, tqdm" 2>/dev/null; then
+  echo "  ℹ️  核心依赖已装（$PYBIN），跳过（用 --force 重装）"
 else
   cd "$SKILL_DIR"
-  python3 -m pip install --upgrade pip
-  python3 -m pip install -r requirements.txt
-  echo "  ✅ Python 依赖已装"
+  # ★ 用锁定的 $PYBIN 装（而非裸 python3），保证装到 qclaw 跑 archive-cli 会用的同一个解释器
+  "$PYBIN" -m pip install --upgrade pip
+  "$PYBIN" -m pip install -r requirements.txt
+  echo "  ✅ Python 依赖已装（→ $PYBIN）"
 fi
 
 # ---------- 2. 装 archive 命令 ----------
@@ -403,6 +456,7 @@ cat > "$ARCHIVE_BIN" <<EOF
 # archive — 桌面整理超短入口（由 install_qclaw_integration.sh 生成）
 set -e
 SKILL_DIR="$SKILL_DIR"
+PYBIN="$PYBIN"
 
 if [ \$# -eq 0 ]; then
   echo "用法: archive \"<意图>\" [目录]"
@@ -416,17 +470,17 @@ fi
 cd "\$SKILL_DIR"
 
 if [ "\$1" = "list" ] || [ "\$1" = "--list" ]; then
-  exec python3 -m archive_assistant.cli.main auto --list-intents
+  exec "\$PYBIN" -m archive_assistant.cli.main auto --list-intents
 fi
 
 INTENT="\$1"
 ROOT="\${2:-\$HOME/Desktop}"
 
 if [ "\$INTENT" = "回滚" ] || [ "\$INTENT" = "rollback" ]; then
-  exec python3 -m archive_assistant.cli.main auto "回滚" --execute --apply
+  exec "\$PYBIN" -m archive_assistant.cli.main auto "回滚" --execute --apply
 fi
 
-exec python3 -m archive_assistant.cli.main auto "\$INTENT" --root "\$ROOT" --execute --apply
+exec "\$PYBIN" -m archive_assistant.cli.main auto "\$INTENT" --root "\$ROOT" --execute --apply
 EOF
 chmod +x "$ARCHIVE_BIN"
 echo "  ✅ archive → $ARCHIVE_BIN"
@@ -439,11 +493,12 @@ cat > "$ARCHIVE_CLI_BIN" <<EOF
 #!/usr/bin/env bash
 # archive-cli — 桌面整理 CLI 透传入口（由 install_qclaw_integration.sh 生成）
 # 用法: archive-cli <子命令> <目录> [参数...]，等价于在仓库目录里跑
-#        python3 -m archive_assistant.cli.main <子命令> <目录> [参数...]
+#        \$PYBIN -m archive_assistant.cli.main <子命令> <目录> [参数...]
 set -e
 SKILL_DIR="$SKILL_DIR"
+PYBIN="$PYBIN"
 cd "\$SKILL_DIR"
-exec python3 -m archive_assistant.cli.main "\$@"
+exec "\$PYBIN" -m archive_assistant.cli.main "\$@"
 EOF
 chmod +x "$ARCHIVE_CLI_BIN"
 echo "  ✅ archive-cli → $ARCHIVE_CLI_BIN"
@@ -652,47 +707,76 @@ if [ "$SKIP_CONFIG" -eq 0 ]; then
   if [ ! -f "$OPENCLAW" ]; then
     echo "  ⚠️  $OPENCLAW 不存在，跳过"
   else
-    # 备份
-    cp "$OPENCLAW" "${OPENCLAW}.bak.$(date +%Y%m%d%H%M%S)"
+    # 改造目标 agent（不新建！只改已注册 agent 的字段：改名 + 身份 + 挂技能 + ★单独指强模型）。
+    # ★ 关键：同一套改造同时写入 openclaw.json 与 openclaw.json.last-good，否则 qclaw 启动 clobber
+    #   完整性保护会判主文件「被污染」→ 回滚成 last-good，把改动全抹掉（见头部 ★★clobber）。
+    #   备份由下方 python 对每个文件各自生成（.bak.<时间戳>），失败可回退。
+    python3 - "$OPENCLAW" "$TARGET_AGENT_ID" "$SKILL_ID" "$AGENT_MODEL" <<'PY'
+import json, sys, os, shutil, time
 
-    # 改造目标 agent（不新建！只改已注册 agent 的字段：改名 + 身份 + 挂技能）
-    python3 - "$OPENCLAW" "$TARGET_AGENT_ID" "$SKILL_ID" <<'PY'
-import json, sys
+config_path, target_id, skill_id, agent_model = sys.argv[1:5]
+ts = time.strftime('%Y%m%d%H%M%S')
 
-config_path, target_id, skill_id = sys.argv[1:4]
-with open(config_path, 'r', encoding='utf-8') as f:
-    cfg = json.load(f)
+def apply_changes(cfg):
+    """就地改造 cfg，返回 (命中的 agent, 变更列表)；未找到 agent 返回 (None, None)。"""
+    alist = cfg.setdefault('agents', {}).setdefault('list', [])
+    a = next((x for x in alist if x.get('id') == target_id), None)
+    if a is None:
+        return None, None
+    changed = []
+    # 1) 改名 + 身份 → 桌面整理助手
+    if a.get('name') != '桌面整理助手':
+        a['name'] = '桌面整理助手'; changed.append('name')
+    idn = a.setdefault('identity', {})
+    idn['name'] = '桌面整理助手'
+    idn['emoji'] = '🗂️'
+    idn['avatar'] = '🗂️'
+    a.setdefault('reasoningDefault', 'stream')
+    # 2) 挂技能（保留原有其他技能，去重，放最前）
+    skills = a.setdefault('skills', [])
+    if skill_id not in skills:
+        skills.insert(0, skill_id); changed.append('skill')
+    # 3) ★根因修复：给 agent 补上独立 model 字段（配置结构完整，skill 上下文才会正确注入；
+    #    见头部 ★★模型字段根因——关键是"有这个字段"，非模型强弱）。
+    #    agent_model 为空（--no-model-override）时不写 model 字段。
+    if agent_model:
+        want = {'primary': agent_model}
+        if a.get('model') != want:
+            a['model'] = want; changed.append('model=%s' % agent_model)
+    # 4) 全局启用该 skill
+    cfg.setdefault('skills', {})[skill_id] = {'enabled': True}
+    return a, changed
 
-alist = cfg.setdefault('agents', {}).setdefault('list', [])
-a = next((x for x in alist if x.get('id') == target_id), None)
-if a is None:
-    print(f'  ❌ 目标 agent {target_id} 不在 openclaw，改造中止')
+# 主文件 + last-good 一起改（防 clobber 回滚）
+targets = [config_path, config_path + '.last-good']
+main_hit = False
+for path in targets:
+    label = os.path.basename(path)
+    if not os.path.exists(path):
+        print('  ℹ️  %s 不存在，跳过' % label)
+        continue
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception as e:
+        print('  ⚠️  %s 解析失败（%s），跳过' % (label, e))
+        continue
+    a, changed = apply_changes(cfg)
+    if a is None:
+        print('  ⚠️  %s 里没有目标 agent %s，跳过' % (label, target_id))
+        continue
+    shutil.copy2(path, '%s.bak.%s' % (path, ts))
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    print('  ✅ %s 已改造（变更: %s；备份 %s.bak.%s）'
+          % (label, ','.join(changed) if changed else '无(已是目标态)', label, ts))
+    if path == config_path:
+        main_hit = True
+
+if not main_hit:
+    print('  ❌ 主文件 openclaw.json 未能改造（目标 agent 缺失或文件损坏）')
     sys.exit(1)
-
-# 1) 改名 + 身份 → 桌面整理助手
-a['name'] = '桌面整理助手'
-idn = a.setdefault('identity', {})
-idn['name'] = '桌面整理助手'
-idn['emoji'] = '🗂️'
-idn['avatar'] = '🗂️'
-a.setdefault('reasoningDefault', 'stream')
-
-# 2) 挂技能（保留 agent 原有其他技能，去重，放最前）
-skills = a.setdefault('skills', [])
-if skill_id not in skills:
-    skills.insert(0, skill_id)
-    print(f'  ✅ 已挂载技能 {skill_id}')
-else:
-    print(f'  ℹ️  技能 {skill_id} 已挂载')
-
-# 3) 全局启用该 skill
-sk = cfg.setdefault('skills', {})
-sk[skill_id] = {'enabled': True}
-
-with open(config_path, 'w', encoding='utf-8') as f:
-    json.dump(cfg, f, indent=2, ensure_ascii=False)
-
-print(f'  ✅ agent {target_id} 已改造为「桌面整理助手」（name/identity/skill 已更新，备份已保存）')
+print('  ✅ agent %s 已改造为「桌面整理助手」（name/identity/skill/model 已就位，主文件与 last-good 已同步）' % target_id)
 PY
   fi
 else
@@ -708,15 +792,15 @@ pass(){ echo "  ✅ $1"; }
 fail(){ echo "  ❌ $1"; FAIL=$((FAIL+1)); }
 warn(){ echo "  ⚠️  $1"; WARN=$((WARN+1)); }
 
-# 1) Python 核心依赖可导入
-if python3 -c "import yaml, PIL, numpy, tqdm" 2>/dev/null; then
-  pass "Python 核心依赖 (PyYAML/Pillow/numpy/tqdm) 已就绪"
+# 1) Python 核心依赖可导入（★用锁定的 $PYBIN 检测 = qclaw 跑 archive-cli 实际会用的那个解释器）
+if "$PYBIN" -c "import yaml, PIL, numpy, tqdm" 2>/dev/null; then
+  pass "Python 核心依赖 (PyYAML/Pillow/numpy/tqdm) 已就绪（解释器 $PYBIN）"
 else
-  fail "Python 核心依赖缺失 → 修复: cd $SKILL_DIR && python3 -m pip install -r requirements.txt（或重跑本脚本 --force）"
+  fail "核心依赖在 $PYBIN 下缺失（agent 跑 archive-cli 会 ModuleNotFoundError）→ 修复: cd $SKILL_DIR && \"$PYBIN\" -m pip install -r requirements.txt（或重跑本脚本 --force）"
 fi
 
 # 2) archive_assistant 包可导入（代码是否真的在位）
-if ( cd "$SKILL_DIR" && python3 -c "import archive_assistant" ) 2>/dev/null; then
+if ( cd "$SKILL_DIR" && "$PYBIN" -c "import archive_assistant" ) 2>/dev/null; then
   pass "archive_assistant 包可导入（代码就位）"
 else
   fail "archive_assistant 包无法导入 → 确认仓库完整: cd $SKILL_DIR && git pull"
@@ -736,11 +820,18 @@ else
   fail "archive-cli 缺失 → 重跑本脚本（第 2 步会生成 $ARCHIVE_CLI_BIN）"
 fi
 
-# 4) 端到端：archive CLI 真能起来（列出意图，只读、不动文件）
-if ( cd "$SKILL_DIR" && python3 -m archive_assistant.cli.main auto --list-intents ) >/dev/null 2>&1; then
-  pass "archive CLI 端到端可运行（archive list 通过）"
+# 3c) ★wrapper 已把解释器锁定成绝对路径 $PYBIN（防 GUI PATH 错配：装依赖的 python == wrapper 跑的 python）
+if [ -x "$ARCHIVE_CLI_BIN" ] && grep -qF "PYBIN=\"$PYBIN\"" "$ARCHIVE_CLI_BIN" && ! grep -qE '^[[:space:]]*exec python3 ' "$ARCHIVE_CLI_BIN"; then
+  pass "archive-cli 已锁定解释器绝对路径（$PYBIN，与装依赖的一致，杜绝 GUI PATH 错配）"
 else
-  fail "archive CLI 无法运行 → 手动排查: cd $SKILL_DIR && python3 -m archive_assistant.cli.main auto --list-intents"
+  fail "archive-cli 未锁定到 $PYBIN（疑似旧版裸 python3 wrapper 残留，会重现 ModuleNotFoundError）→ 重跑本脚本（第 2 步会写死绝对路径）"
+fi
+
+# 4) 端到端：archive CLI 真能起来（★用 $PYBIN，列出意图，只读、不动文件）
+if ( cd "$SKILL_DIR" && "$PYBIN" -m archive_assistant.cli.main auto --list-intents ) >/dev/null 2>&1; then
+  pass "archive CLI 端到端可运行（archive list 通过，解释器 $PYBIN）"
+else
+  fail "archive CLI 无法运行 → 手动排查: cd $SKILL_DIR && \"$PYBIN\" -m archive_assistant.cli.main auto --list-intents"
 fi
 
 # 5) SKILL.md 已同步到 qclaw（agent prompt 来源）
@@ -764,29 +855,53 @@ else
   fail "workspace 规则文件缺失 → 重跑本脚本 --force（第 5 步生成）"
 fi
 
-# 8) openclaw.json 里目标 agent 已被改造成「桌面整理助手」且 skill 已挂载启用
+# 8) openclaw.json 里目标 agent 已被改造成「桌面整理助手」，且 skill 挂载启用、model 已指强模型、
+#    last-good 与主文件一致（防 clobber 回滚）。任一不满足都会导致重启后失灵，故合并成一项严格校验。
 if [ -f "$OPENCLAW" ]; then
-  AGENT_CHECK=$(python3 - "$OPENCLAW" "$TARGET_AGENT_ID" "$SKILL_ID" <<'PY' 2>/dev/null || true
-import json, sys
-openclaw, tid, sid = sys.argv[1:4]
-cfg = json.load(open(openclaw))
-alist = cfg.get('agents', {}).get('list', [])
-a = next((x for x in alist if x.get('id') == tid), None)
+  AGENT_CHECK=$(python3 - "$OPENCLAW" "$TARGET_AGENT_ID" "$SKILL_ID" "$AGENT_MODEL" <<'PY' 2>/dev/null || true
+import json, sys, os
+openclaw, tid, sid, want_model = sys.argv[1:5]
+
+def load(p):
+    try:
+        with open(p, encoding='utf-8') as f: return json.load(f)
+    except Exception:
+        return None
+
+def get_agent(cfg):
+    if not cfg: return None
+    return next((x for x in cfg.get('agents', {}).get('list', []) if x.get('id') == tid), None)
+
+def prim(a):
+    return (a.get('model') or {}).get('primary') if a else None
+
+cfg = load(openclaw)
+a = get_agent(cfg)
 if a is None:
     print('NOAGENT'); sys.exit(0)
-name_ok = (a.get('name') == '桌面整理助手')
-skill_on_agent = sid in (a.get('skills') or [])
-skill_enabled = bool(cfg.get('skills', {}).get(sid, {}).get('enabled'))
-print('OK' if (name_ok and skill_on_agent and skill_enabled)
-      else ('NONAME' if not name_ok else 'NOSKILL'))
+if a.get('name') != '桌面整理助手':
+    print('NONAME'); sys.exit(0)
+if not (sid in (a.get('skills') or []) and bool(cfg.get('skills', {}).get(sid, {}).get('enabled'))):
+    print('NOSKILL'); sys.exit(0)
+if want_model and prim(a) != want_model:
+    print('NOMODEL'); sys.exit(0)
+# last-good 一致性（防 clobber）：存在则其目标 agent 的 name+model 必须与主文件一致
+lg_path = openclaw + '.last-good'
+if os.path.exists(lg_path):
+    lg = get_agent(load(lg_path))
+    if lg is None or lg.get('name') != a.get('name') or prim(lg) != prim(a):
+        print('DRIFT'); sys.exit(0)
+print('OK')
 PY
 )
   [ -z "$AGENT_CHECK" ] && AGENT_CHECK="ERR"
   case "$AGENT_CHECK" in
-    OK)      pass "openclaw.json：$TARGET_AGENT_ID 已改造为「桌面整理助手」且 skill 已启用" ;;
+    OK)      pass "openclaw.json：$TARGET_AGENT_ID=「桌面整理助手」、skill 已启用、model=${AGENT_MODEL:-继承defaults}、last-good 已同步" ;;
     NOAGENT) fail "openclaw.json 里找不到目标 agent $TARGET_AGENT_ID → 确认它存在，或用 --agent-id 指定" ;;
     NONAME)  fail "目标 agent 未改名成「桌面整理助手」→ 重跑本脚本（第 6 步）" ;;
     NOSKILL) fail "技能 $SKILL_ID 未挂载/未启用 → 重跑本脚本（第 6 步）" ;;
+    NOMODEL) fail "目标 agent 缺独立 model 字段（应为 $AGENT_MODEL；缺字段会导致 skill 上下文没注入、不看 SKILL.md）→ 重跑本脚本（第 6 步）" ;;
+    DRIFT)   fail "openclaw.json 与 .last-good 不一致 → 重启会被 clobber 回滚！重跑本脚本（第 6 步会同步两者）" ;;
     *)       fail "openclaw.json 解析失败 → 检查文件是否损坏: $OPENCLAW" ;;
   esac
 else
@@ -826,6 +941,18 @@ echo "  1. 确保 ollama 已启动:  ollama serve &"
 echo "  2. 测试 archive 命令:   archive list"
 echo "  3. 启动/重启 qclaw，选「桌面整理助手」agent"
 echo "  4. 说「整理桌面」测试"
+echo ""
+echo "★ 若重启后 agent「不看 SKILL.md、瞎编」或改名被还原："
+echo "   - 根因通常是它缺独立 model 字段 → 本脚本第 6 步已给它补上（当前 ${AGENT_MODEL:-(未写，用了 --no-model-override)}）"
+echo "     （注：关键是「有这个字段」，非模型强弱；补上后切回本地模型也照样能读 SKILL.md 执行）"
+echo "   - 请务必【彻底退出】qclaw 再重开（不是关窗口）: pkill -f openclaw.mjs; pkill -f QClaw"
+echo "   - 并给 agent【新开一条对话】测试（旧会话缓存了旧配置/旧上下文）"
+echo "   - 若不想用云端 route: 重跑并加 --agent-model=ollama/ornith-9b:latest（仍会写独立 model 字段）"
+echo ""
+echo "★ 若 agent 跑 archive-cli 报「ModuleNotFoundError: No module named 'yaml'（或 PIL/numpy）」："
+echo "   - 根因：qclaw(GUI) 跑命令用的 python 与你装依赖的不是同一个（GUI 最小 PATH 错配）"
+echo "   - 本脚本已把解释器锁定为绝对路径并写死进 wrapper（与 PATH 无关）: $PYBIN"
+echo "   - 修复：重跑本脚本即可覆盖旧的裸 python3 wrapper；手动兜底: cd $SKILL_DIR && \"$PYBIN\" -m pip install -r requirements.txt"
 echo ""
 echo "远端一键重装（拉最新代码后一条命令搞定）："
 echo "  cd $SKILL_DIR && git pull && bash scripts/install_qclaw_integration.sh --force"
